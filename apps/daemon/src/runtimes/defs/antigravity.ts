@@ -14,7 +14,7 @@ import type { RuntimeAgentDef } from '../types.js';
 
 const ANTIGRAVITY_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 
-// `agy` v1.0.3 still has no `--model` flag (upstream issue #35), but the
+// Older `agy` releases have no `--model` flag (upstream issue #35), but the
 // TUI's Switch-Model picker writes the choice to its settings.json, and
 // every `agy -p` invocation re-reads that file on startup — verified by
 // capturing the `--log-file` line `Propagating selected model override to
@@ -37,10 +37,9 @@ const ANTIGRAVITY_SKIP_PERMISSIONS_FLAG = '--dangerously-skip-permissions';
 // `availableModels` cache miss + empty print-mode output, which surfaces
 // to the user as a generic "empty response" error.
 //
-// The 8 model labels mirror what `Switch Model` in agy's TUI lists for
-// consumer-tier accounts as of 2026-05-28. The set is small and stable
-// enough to ship statically until upstream adds a programmatic
-// `agy models` subcommand (also tracked under issue #35).
+// Keep legacy labels for older CLI installs. New entries use the literal
+// display labels reported by `agy models`, so the settings-based selection
+// remains compatible with both older and current CLI releases.
 const ANTIGRAVITY_SETTINGS_PATH = join(
   homedir(),
   '.gemini',
@@ -177,9 +176,11 @@ export const antigravityAgentDef = {
   helpArgs: ['--help'],
   capabilityFlags: {
     [ANTIGRAVITY_SKIP_PERMISSIONS_FLAG]: 'skipPermissions',
+    '--output-format': 'streamJson',
   },
   fallbackModels: [
     DEFAULT_MODEL_OPTION,
+    { id: 'Gemini 3.8 Flash (High)', label: 'Gemini 3.8 Flash (High)' },
     { id: 'Gemini 3.1 Pro (High)', label: 'Gemini 3.1 Pro (High)' },
     { id: 'Gemini 3.1 Pro (Low)', label: 'Gemini 3.1 Pro (Low)' },
     { id: 'Gemini 3.5 Flash (High)', label: 'Gemini 3.5 Flash (High)' },
@@ -201,8 +202,7 @@ export const antigravityAgentDef = {
   // we got an identical byte-for-byte form re-emission on turn 2 when
   // turn 1's tool-call retry path returned the cached form response.
   //
-  // Instead we treat agy as a stateless plain adapter like qwen /
-  // deepseek: every spawn gets the full OD-rendered transcript via
+  // Instead we keep agy stateless: every spawn gets the full OD-rendered transcript via
   // `buildDaemonTranscript`, and that transcript's prior assistant
   // turns are sanitized to strip `<question-form>` markup + form-schema
   // JSON fences (see `sanitizePriorAssistantTurnForTranscript` in
@@ -245,11 +245,15 @@ export const antigravityAgentDef = {
     if (agentCapabilities.get('antigravity')?.skipPermissions) {
       args.push(ANTIGRAVITY_SKIP_PERMISSIONS_FLAG);
     }
+    if (agentCapabilities.get('antigravity')?.streamJson) {
+      args.push('--output-format', 'stream-json');
+    }
     args.push('-p', prompt);
     return args;
   },
   promptViaStdin: false,
-  streamFormat: 'plain',
+  streamFormat: 'json-event-stream',
+  eventParser: 'antigravity',
   installUrl: 'https://antigravity.google/cli',
   docsUrl: 'https://antigravity.google/docs/cli-overview',
 } satisfies RuntimeAgentDef;

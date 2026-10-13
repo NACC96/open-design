@@ -11057,12 +11057,13 @@ export async function startServer({
     // Single choke point for the codex transport switch. Every other
     // agent — and codex with the switch off — gets back the identical
     // registry object, so nothing below can tell this call happened.
-    const def = applyCodexTransportOverride(getAgentDef(agentId));
-    if (!def)
+    const selectedDef = applyCodexTransportOverride(getAgentDef(agentId));
+    if (!selectedDef)
       return failRun(
         'AGENT_UNAVAILABLE',
         `unknown agent: ${agentId}`,
       );
+    const def = selectedDef.id === 'antigravity' ? { ...selectedDef } : selectedDef;
     if (!def.bin)
       return failRun('AGENT_UNAVAILABLE', 'agent has no binary');
     const byokOpenCodeProvider = def.id === 'byok-opencode'
@@ -11922,6 +11923,13 @@ export async function startServer({
       configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, def.id);
     } catch {
       configuredAgentEnv = {};
+    }
+    if (def.id === 'antigravity') {
+      const capabilities = await ensureDetectedRuntimeCapabilities(def.id, configuredAgentEnv);
+      // Freeze the transport for this attempt before composing prompts. Older
+      // agy versions keep their plain-text path; streaming runs use the native
+      // tool events to refresh the watchdog and fence automatic retries.
+      if (!capabilities?.streamJson) def.streamFormat = 'plain';
     }
     const requestedLiveModelScope = def.id === 'amr'
       ? resolveAmrProfile({

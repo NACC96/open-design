@@ -4,6 +4,7 @@ import {
 } from './opencode-child-evidence.js';
 import { OpenCodeToolEvents } from './opencode-tool-events.js';
 import { boundedRawAgentEvent } from './run-event-payload-budget.js';
+import { createAntigravityEventMapper } from './antigravity-stream.js';
 
 type JsonObject = Record<string, unknown>;
 type StreamEvent = Record<string, unknown>;
@@ -1391,6 +1392,9 @@ export function createJsonEventStreamHandler(
 ) {
   let buffer = '';
   const state: ParserState = createParserState();
+  const mapAntigravityEvent = kind === 'antigravity'
+    ? createAntigravityEventMapper(onEvent)
+    : null;
   const openCodeChildEvidence = kind === 'opencode' && options.openCodeChildEvidence
     ? createOpenCodeRootTaskEvidenceCollector(options.openCodeChildEvidence)
     : null;
@@ -1410,6 +1414,8 @@ export function createJsonEventStreamHandler(
     }
 
     openCodeChildEvidence?.observe(obj);
+
+    if (mapAntigravityEvent?.(obj)) return;
 
     if (kind === 'opencode' && handleOpenCodeEvent(obj, onEvent, state)) return;
     if (kind === 'gemini' && handleGeminiEvent(obj, onEvent, state)) return;

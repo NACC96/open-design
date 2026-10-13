@@ -11,6 +11,74 @@ function collectEvents(kind: string) {
   return { events, handler };
 }
 
+test('antigravity reports native tool progress before the final response', () => {
+  const { events, handler } = collectEvents('antigravity');
+  const step = {
+    conversation_id: 'agy-1', step_index: 4, step_type: 'tool',
+    tool_name: 'run_command',
+    tool_info: { name: 'run_command', parameters: { CommandLine: 'echo hello' } },
+  };
+  handler.feed(`${JSON.stringify({ event: 'init', conversation_id: 'agy-1', init: { model: 'Gemini 3.8 Flash (High)' } })}\n`);
+  handler.feed(`${JSON.stringify({ event: 'step_update', step_update: { ...step, state: 'ACTIVE' } })}\n`);
+  handler.feed(`${JSON.stringify({ event: 'step_update', step_update: { ...step, state: 'ACTIVE' } })}\n`);
+  assert.deepEqual(events.filter((event) => event.type === 'tool_use'), [{
+    type: 'tool_use', id: 'agy-1:4', name: 'run_command', input: { CommandLine: 'echo hello' },
+  }]);
+  assert.equal(events.some((event) => event.type === 'text_delta'), false);
+  handler.feed(`${JSON.stringify({ event: 'step_update', step_update: {
+    ...step, state: 'DONE', tool_info: { ...step.tool_info, output: 'hello\r\n' },
+  } })}\n`);
+  handler.flush();
+  assert.deepEqual(events.filter((event) => event.type === 'tool_result'), [{
+    type: 'tool_result', toolUseId: 'agy-1:4', content: 'hello\r\n', isError: false,
+  }]);
+});
+
+test('antigravity reassembles text chunks and suppresses the terminal response replay', () => {
+  const { events, handler } = collectEvents('antigravity');
+  const frames = [
+    { event: 'step_update', step_update: { step_type: 'user_input', state: 'DONE', text_delta: 'private prompt' } },
+    { event: 'step_update', step_update: { step_type: 'agent_response', step_index: 3, state: 'ACTIVE', text_delta: 'Hello ' } },
+    { event: 'step_update', step_update: { step_type: 'agent_response', step_index: 3, state: 'DONE', text_delta: 'world' } },
+    { event: 'result', result: { status: 'SUCCESS', response: 'Hello world', duration_seconds: 2, usage: {
+      input_tokens: 12, output_tokens: 4, thinking_tokens: 3, cache_read_tokens: 8,
+    } } },
+  ].map((frame) => JSON.stringify(frame)).join('\n');
+  for (let offset = 0; offset < frames.length; offset += 7) handler.feed(frames.slice(offset, offset + 7));
+  handler.flush();
+  assert.equal(events.filter((event) => event.type === 'text_delta').map((event) => event.delta).join(''), 'Hello world');
+  assert.deepEqual(events.find((event) => event.type === 'usage'), {
+    type: 'usage', usage: { input_tokens: 12, output_tokens: 4, thought_tokens: 3, cached_read_tokens: 8 },
+    durationMs: 2000, isError: false,
+  });
+});
+
+test('antigravity preserves a final-only response and reports native failures', () => {
+  for (const error of ['authentication required', 'RESOURCE_EXHAUSTED: quota exceeded']) {
+    const { events, handler } = collectEvents('antigravity');
+    handler.feed(`${JSON.stringify({ event: 'result', result: { status: 'ERROR', error } })}\n`);
+    handler.flush();
+    assert.deepEqual(events.find((event) => event.type === 'error'), { type: 'error', message: error });
+  }
+  const { events, handler } = collectEvents('antigravity');
+  handler.feed(`${JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'Finished.' } })}\n`);
+  handler.flush();
+  assert.deepEqual(events.filter((event) => event.type === 'text_delta'), [{ type: 'text_delta', delta: 'Finished.' }]);
+});
+
+test('antigravity handles completed-only tools and deduplicates repeated completion snapshots', () => {
+  const { events, handler } = collectEvents('antigravity');
+  const step = { conversation_id: 'agy-2', step_index: 5, step_type: 'tool', state: 'DONE',
+    tool_info: { name: 'write_to_file', parameters: { TargetFile: 'draft.html' }, error: { type: 'FAILED', message: 'write denied' } },
+  };
+  handler.feed(`${JSON.stringify({ event: 'step_update', step_update: step })}\n`.repeat(2));
+  handler.flush();
+  assert.equal(events.filter((event) => event.type === 'tool_use').length, 1);
+  assert.deepEqual(events.filter((event) => event.type === 'tool_result'), [{
+    type: 'tool_result', toolUseId: 'agy-2:5', content: 'write denied', isError: true,
+  }]);
+});
+
 test('opencode json stream emits text and usage events', () => {
   const { events, handler } = collectEvents('opencode');
 

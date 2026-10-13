@@ -655,7 +655,7 @@ test('qwen args check promptViaStdin, base args, model args and exclude `-` sent
 // the real prompt as the `-p` argument.
 test('antigravity passes prompt via -p argument (print mode)', () => {
   assert.equal(antigravity.bin, 'agy');
-  assert.equal(antigravity.streamFormat, 'plain');
+  assert.equal(antigravity.streamFormat, 'json-event-stream');
   assert.equal(antigravity.promptViaStdin, false);
 
   const args = antigravity.buildArgs('write hello world', [], [], {}, {});
@@ -671,19 +671,23 @@ test('antigravity passes prompt via -p argument (print mode)', () => {
     'write hello world',
   ]);
 
-  // No `--model` flag exists upstream, so buildArgs argv must stay the
-  // same regardless of which label the user picks.
+  // The settings-based adapter keeps buildArgs argv identical regardless
+  // of which label the user picks, including on older CLI releases.
   // Pass a temp antigravitySettingsPath so buildArgs does not touch the
   // real ~/.gemini/antigravity-cli/settings.json during a unit test run.
   const settingsDir = mkdtempSync(join(tmpdir(), 'od-agy-argv-'));
   try {
     const withModel = antigravity.buildArgs('hi', [], [], {
-      model: 'Gemini 3.1 Pro (High)',
+      model: 'Gemini 3.8 Flash (High)',
     }, {
       agentLogFilePath: '/tmp/od-agy-test.log',
       antigravitySettingsPath: join(settingsDir, 'settings.json'),
     });
     assert.equal(withModel.includes('--model'), false);
+    assert.equal(
+      JSON.parse(readFileSync(join(settingsDir, 'settings.json'), 'utf8')).model,
+      'Gemini 3.8 Flash (High)',
+    );
     assert.deepEqual(withModel, [
       '--log-file',
       '/tmp/od-agy-test.log',
@@ -716,14 +720,13 @@ test('antigravity passes prompt via -p argument (print mode)', () => {
 
   assert.equal(antigravity.maxPromptArgBytes, undefined);
 
-  // Picker exposes the synthetic Default + the 8 labels agy's TUI
-  // Switch-Model surfaces for consumer-tier accounts. The set is small
-  // enough to ship statically; revisit when upstream adds an `agy
-  // models` subcommand (also tracked under issue #35).
+  // Include the current High Flash option while retaining legacy choices
+  // for older CLI installs.
   assert.deepEqual(
     antigravity.fallbackModels.map((m) => m.id),
     [
       'default',
+      'Gemini 3.8 Flash (High)',
       'Gemini 3.1 Pro (High)',
       'Gemini 3.1 Pro (Low)',
       'Gemini 3.5 Flash (High)',
@@ -735,11 +738,9 @@ test('antigravity passes prompt via -p argument (print mode)', () => {
     ],
   );
 
-  // `agy` v1.0.3 has no `--model` flag (upstream #35), no `models`
-  // subcommand, and no `/model` slash command — a user-typed model id
-  // would be silently ignored at spawn, looking like an OD bug. The
-  // settings UI hides the "Custom (fill below)" option when this is
-  // `false`. Remove this opt-out once upstream wires #35.
+  // Keep selection limited to verified display labels. Unrecognized labels
+  // cannot resolve through the settings-based adapter, so the settings UI
+  // hides the "Custom (fill below)" option.
   assert.equal(antigravity.supportsCustomModel, false);
 });
 
@@ -748,6 +749,7 @@ test('antigravity gates non-interactive permission bypass on the detected CLI ca
   assert.deepEqual(antigravity.helpArgs, ['--help']);
   assert.deepEqual(antigravity.capabilityFlags, {
     '--dangerously-skip-permissions': 'skipPermissions',
+    '--output-format': 'streamJson',
   });
   assert.deepEqual(antigravity.buildArgs('', [], [], {}), ['-p', '']);
 
@@ -792,6 +794,17 @@ test('antigravity places permission bypass after log args', () => {
         '',
       ],
     );
+  } finally {
+    agentCapabilities.delete('antigravity');
+  }
+});
+
+test('antigravity requests live progress only when the CLI supports streaming JSON', () => {
+  agentCapabilities.set('antigravity', { streamJson: true });
+  try {
+    assert.deepEqual(antigravity.buildArgs('make a price list', [], [], {}), [
+      '--output-format', 'stream-json', '-p', 'make a price list',
+    ]);
   } finally {
     agentCapabilities.delete('antigravity');
   }
