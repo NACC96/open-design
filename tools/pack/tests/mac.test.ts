@@ -277,19 +277,30 @@ describe("copyMacPrebundleRuntimeDependencies", () => {
 });
 
 describe("renderMacPackagedConfig", () => {
-  it("bakes an explicit updater opt-out into a local fork", () => {
-    const saved = process.env.OD_UPDATE_ENABLED;
-    try {
-      process.env.OD_UPDATE_ENABLED = '0';
-      const config = makeConfig(join(tmpdir(), 'od-model-picker-test'), { namespace: 'model-picker' });
-      const rendered = JSON.parse(renderMacPackagedConfig({
-        appVersion: '0.24.1-fork.1', config, usePrebundledStandaloneWeb: true,
-      }));
+  describe("updater opt-out", () => {
+    const root = join(tmpdir(), "od-updater-opt-out-test");
+    const render = (overrides: Partial<ToolPackConfig>) => renderMacPackagedConfig({
+      appVersion: "0.24.1-fork.1",
+      config: makeConfig(root, { namespace: "updater-opt-out", ...overrides }),
+      usePrebundledStandaloneWeb: true,
+    });
+
+    it("bakes an explicit opt-out into a fork package", () => {
+      const rendered = JSON.parse(render({ updateEnabled: false })) as Record<string, unknown>;
       expect(rendered.updateEnabled).toBe(false);
-    } finally {
-      if (saved == null) delete process.env.OD_UPDATE_ENABLED;
-      else process.env.OD_UPDATE_ENABLED = saved;
-    }
+    });
+
+    it("leaves a default build byte-identical whether the switch is unset or on", () => {
+      const unset = render({});
+      expect(JSON.parse(unset)).not.toHaveProperty("updateEnabled");
+      expect(render({ updateEnabled: true })).toBe(unset);
+    });
+
+    it("refuses to bake the opt-out into an official release namespace", () => {
+      expect(() => render({ namespace: "release-beta", updateEnabled: false })).toThrow(
+        /refusing to bake the updater opt-out .* official beta release namespace "release-beta"/,
+      );
+    });
   });
 
   it("omits nodeCommandRelative so packaged mac sidecars use Electron as Node", async () => {

@@ -25,6 +25,7 @@ import {
   resolveNodePtyRuntimeArch,
 } from "../node-pty-runtime.js";
 import { copyBundledResourceTrees, packBundledDshRuntime } from "../resources/index.js";
+import { resolveBakedUpdaterPolicy } from "../updates/updater-policy.js";
 import { copyOptionalVelaCliBinary } from "../vela-cli.js";
 import { electronBuilderVersionForAppVersion } from "../versioning/index.js";
 import { runEsbuild, runNpmInstall, runPnpm } from "./commands.js";
@@ -175,8 +176,7 @@ export function renderMacPackagedConfig(options: {
       namespace: options.config.namespace,
       ...(options.config.telemetryRelayUrl == null ? {} : { telemetryRelayUrl: options.config.telemetryRelayUrl }),
       ...(options.config.updateMetadataUrl == null ? {} : { updateMetadataUrl: options.config.updateMetadataUrl }),
-      // Local forks can opt out of the official updater at packaging time.
-      ...(process.env.OD_UPDATE_ENABLED === '0' ? { updateEnabled: false } : {}),
+      ...resolveBakedUpdaterPolicy(options.config),
       ...(options.config.posthogKey == null ? {} : { posthogKey: options.config.posthogKey }),
       ...(options.config.posthogHost == null ? {} : { posthogHost: options.config.posthogHost }),
       ...(options.config.velaWebUrl == null ? {} : { velaWebUrl: options.config.velaWebUrl }),

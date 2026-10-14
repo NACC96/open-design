@@ -11,8 +11,11 @@ const savedVelaWebUrl = process.env.OD_VELA_WEB_URL;
 const savedVelaWebUrlProd = process.env.OD_VELA_WEB_URL_PROD;
 const savedVelaWebUrlTest = process.env.OD_VELA_WEB_URL_TEST;
 const savedVelaWebUrlFeatureTest = process.env.OD_VELA_WEB_URL_FEATURE_TEST;
+const savedUpdateEnabled = process.env.OD_UPDATE_ENABLED;
 
 afterEach(() => {
+  if (savedUpdateEnabled == null) delete process.env.OD_UPDATE_ENABLED;
+  else process.env.OD_UPDATE_ENABLED = savedUpdateEnabled;
   if (savedVelaWebUrl == null) {
     delete process.env.OD_VELA_WEB_URL;
   } else {
@@ -130,6 +133,32 @@ describe("resolveToolPackConfig namespace defaults", () => {
     expect(resolveToolPackConfig("mac", { appVersion: "0.8.0-beta.4", namespace: "custom-beta" }).namespace).toBe(
       "custom-beta",
     );
+  });
+});
+
+describe("resolveToolPackConfig updater switch", () => {
+  it("accepts the packaged runtime's boolean vocabulary", () => {
+    for (const [value, expected] of [
+      ["0", false], ["false", false], ["no", false],
+      ["1", true], ["true", true], ["yes", true],
+    ] as const) {
+      process.env.OD_UPDATE_ENABLED = value;
+      expect(resolveToolPackConfig("mac", { namespace: "updater-switch-test" }).updateEnabled).toBe(expected);
+    }
+  });
+
+  it("leaves the switch undefined when unset or empty", () => {
+    delete process.env.OD_UPDATE_ENABLED;
+    expect(resolveToolPackConfig("mac", { namespace: "updater-switch-test" }).updateEnabled).toBeUndefined();
+    process.env.OD_UPDATE_ENABLED = "";
+    expect(resolveToolPackConfig("mac", { namespace: "updater-switch-test" }).updateEnabled).toBeUndefined();
+  });
+
+  it("rejects values the packaged runtime would reject instead of building with updates on", () => {
+    for (const value of ["off", "FALSE", " 0", "2"]) {
+      process.env.OD_UPDATE_ENABLED = value;
+      expect(() => resolveToolPackConfig("mac")).toThrow(/OD_UPDATE_ENABLED must be one of 1\/0\/true\/false\/yes\/no/);
+    }
   });
 });
 
