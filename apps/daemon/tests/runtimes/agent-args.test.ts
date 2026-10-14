@@ -6,6 +6,8 @@ import {
 import { writeAntigravityModelSelection } from '../../src/runtimes/defs/antigravity.js';
 import { parseOpenCodeModels } from '../../src/runtimes/defs/opencode.js';
 import { agentCapabilities } from '../../src/runtimes/capabilities.js';
+import { readLocalAgentProfileDefs } from '../../src/runtimes/local-profiles.js';
+import { applyStructuredStreamUpgrade } from '../../src/runtimes/stream-transport.js';
 import {
   getRememberedLiveModels,
   rememberLiveModels,
@@ -655,7 +657,7 @@ test('qwen args check promptViaStdin, base args, model args and exclude `-` sent
 // the real prompt as the `-p` argument.
 test('antigravity passes prompt via -p argument (print mode)', () => {
   assert.equal(antigravity.bin, 'agy');
-  assert.equal(antigravity.streamFormat, 'json-event-stream');
+  assert.equal(antigravity.streamFormat, 'plain');
   assert.equal(antigravity.promptViaStdin, false);
 
   const args = antigravity.buildArgs('write hello world', [], [], {}, {});
@@ -799,14 +801,76 @@ test('antigravity places permission bypass after log args', () => {
   }
 });
 
-test('antigravity requests live progress only when the CLI supports streaming JSON', () => {
+test('antigravity requests live progress only on the per-run streaming transport', () => {
+  // The registry def is the baseline every agy build understands: plain
+  // stdout and no `--output-format`, whatever the shared capability cache
+  // says. Only the per-run def from the transport decision adds the flag.
+  assert.deepEqual(antigravity.structuredStreamUpgrade, {
+    capability: 'streamJson',
+    streamFormat: 'json-event-stream',
+    eventParser: 'antigravity',
+  });
   agentCapabilities.set('antigravity', { streamJson: true });
   try {
     assert.deepEqual(antigravity.buildArgs('make a price list', [], [], {}), [
-      '--output-format', 'stream-json', '-p', 'make a price list',
+      '-p', 'make a price list',
     ]);
   } finally {
     agentCapabilities.delete('antigravity');
+  }
+
+  for (const caps of [null, {}, { streamJson: false }]) {
+    assert.equal(applyStructuredStreamUpgrade(antigravity, caps), antigravity);
+  }
+
+  const streaming = applyStructuredStreamUpgrade(antigravity, { streamJson: true });
+  assert.equal(streaming.streamFormat, 'json-event-stream');
+  assert.equal(streaming.eventParser, 'antigravity');
+  assert.equal(antigravity.streamFormat, 'plain', 'the registry def is never mutated');
+  // The decision is frozen into the per-run def: a later detection refresh
+  // or a `--help` timeout that rewrites the shared cache cannot drop the
+  // flag while the run keeps the stream-json parser.
+  agentCapabilities.set('antigravity', { skipPermissions: true, streamJson: false });
+  try {
+    assert.deepEqual(
+      streaming.buildArgs('make a price list', [], [], {}, { agentLogFilePath: '/tmp/agy.log' }),
+      [
+        '--log-file', '/tmp/agy.log',
+        '--dangerously-skip-permissions',
+        '--output-format', 'stream-json',
+        '-p', 'make a price list',
+      ],
+    );
+  } finally {
+    agentCapabilities.delete('antigravity');
+  }
+});
+
+test('local profiles based on antigravity take the same transport decision', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-agy-profile-'));
+  const previous = process.env.OD_AGENT_PROFILES_CONFIG;
+  try {
+    const file = join(dir, 'agents.local.json');
+    writeFileSync(file, JSON.stringify({
+      agents: [{ id: 'agy-work', baseAgent: 'antigravity', name: 'Antigravity (work)' }],
+    }));
+    process.env.OD_AGENT_PROFILES_CONFIG = file;
+    const [profile] = readLocalAgentProfileDefs([antigravity]);
+    assert.ok(profile);
+    assert.equal(profile.streamFormat, 'plain');
+    assert.deepEqual(profile.buildArgs('hi', [], [], {}), ['-p', 'hi']);
+    const streaming = applyStructuredStreamUpgrade(profile, { streamJson: true });
+    assert.equal(streaming.id, 'agy-work');
+    assert.equal(streaming.streamFormat, 'json-event-stream');
+    assert.equal(streaming.eventParser, 'antigravity');
+    assert.deepEqual(streaming.buildArgs('hi', [], [], {}), [
+      '--output-format', 'stream-json', '-p', 'hi',
+    ]);
+    assert.equal(applyStructuredStreamUpgrade(profile, { streamJson: false }), profile);
+  } finally {
+    if (previous === undefined) delete process.env.OD_AGENT_PROFILES_CONFIG;
+    else process.env.OD_AGENT_PROFILES_CONFIG = previous;
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

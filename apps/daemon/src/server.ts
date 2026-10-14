@@ -512,6 +512,7 @@ import {
   getDetectedRuntimeVersions,
   ensureDetectedRuntimeCapabilities,
 } from './runtimes/detection.js';
+import { resolveRuntimeStreamTransport } from './runtimes/stream-transport.js';
 import { resolveBundledOdNextRuntimeCapability } from './runtimes/od-next-capability-gate.js';
 import {
   createOdNextNativeBuildPackageBindings,
@@ -11063,9 +11064,25 @@ export async function startServer({
         'AGENT_UNAVAILABLE',
         `unknown agent: ${agentId}`,
       );
-    const def = selectedDef.id === 'antigravity' ? { ...selectedDef } : selectedDef;
-    if (!def.bin)
+    if (!selectedDef.bin)
       return failRun('AGENT_UNAVAILABLE', 'agent has no binary');
+    // The per-agent CLI env (binary overrides, auth env) is read here, before
+    // the transport decision below, so the `--help` probe reads the same
+    // executable the spawn will launch.
+    let configuredAgentEnv = {};
+    let appConfigForRun = null;
+    try {
+      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
+      appConfigForRun = appConfig;
+      configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, selectedDef.id);
+    } catch {
+      configuredAgentEnv = {};
+    }
+    // Freeze this attempt's transport before anything reads `def.streamFormat`:
+    // the composed prompt (API-mode override, execution profile), the stream
+    // parser, stdout artifact extraction, and the argv all follow this one
+    // decision. Defs without a `structuredStreamUpgrade` come back unchanged.
+    const def = await resolveRuntimeStreamTransport(selectedDef, configuredAgentEnv);
     const byokOpenCodeProvider = def.id === 'byok-opencode'
       ? buildOpenCodeByokProviderConfig(
           byokProvider,
@@ -11915,22 +11932,8 @@ export async function startServer({
     // kept as a real identity because ACP runtimes can leave model selection to
     // the upstream session's own configured default; omitted models may still
     // resolve to an available fallback below.
-    let configuredAgentEnv = {};
-    let appConfigForRun = null;
-    try {
-      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
-      appConfigForRun = appConfig;
-      configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, def.id);
-    } catch {
-      configuredAgentEnv = {};
-    }
-    if (def.id === 'antigravity') {
-      const capabilities = await ensureDetectedRuntimeCapabilities(def.id, configuredAgentEnv);
-      // Freeze the transport for this attempt before composing prompts. Older
-      // agy versions keep their plain-text path; streaming runs use the native
-      // tool events to refresh the watchdog and fence automatic retries.
-      if (!capabilities?.streamJson) def.streamFormat = 'plain';
-    }
+    // `configuredAgentEnv` / `appConfigForRun` were read right after the def
+    // was selected (the transport decision needs the configured binary).
     const requestedLiveModelScope = def.id === 'amr'
       ? resolveAmrProfile({
           ...process.env,

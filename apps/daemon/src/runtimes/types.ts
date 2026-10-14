@@ -83,6 +83,13 @@ export type RuntimeContext = {
    * than forwarding Child text into the parent UI stream.
    */
   observeNativeChildBehavior?: boolean;
+  /**
+   * True when this run uses the def's `structuredStreamUpgrade`. Set only by
+   * `resolveRuntimeStreamTransport`, on the same per-run def copy that carries
+   * the upgraded `streamFormat`, so the argv and the parser come from one
+   * decision. Absent means the def's baseline `streamFormat`.
+   */
+  structuredStream?: boolean;
 };
 
 // Marker on a RuntimeAgentDef declaring that the adapter's CLI maintains
@@ -161,6 +168,26 @@ export type RuntimeAgentDef = {
     runtimeContext?: RuntimeContext,
   ) => string[];
   streamFormat: string;
+  /**
+   * A structured stream that only some installed builds of this CLI support.
+   *
+   * `streamFormat` stays the baseline every build understands, and it is what
+   * any caller that reads the registry def directly gets. Run-starting paths
+   * (chat runs, the connection test) pass the def through
+   * `resolveRuntimeStreamTransport` (`runtimes/stream-transport.ts`), which
+   * probes `--help` once and, when `capability` is advertised, returns a
+   * per-run copy whose `streamFormat`, `eventParser`, and `buildArgs` (via
+   * `RuntimeContext.structuredStream`) all switch together. Prompt
+   * composition, the execution profile, the parser, and the argv therefore
+   * read one decision instead of separate reads of the shared capability map.
+   * Local profiles inherit this field from their base adapter.
+   */
+  structuredStreamUpgrade?: {
+    /** `capabilityFlags` key that must be advertised, e.g. `streamJson`. */
+    capability: string;
+    streamFormat: string;
+    eventParser?: string;
+  };
   fallbackBins?: string[];
   versionProbeTimeoutMs?: number;
   versionPolicy?: RuntimeVersionPolicy;
@@ -359,6 +386,9 @@ export type DetectedAgent = Omit<
   | 'inactivityTimeoutMs'
   | 'firstOutputTimeoutMs'
   | 'authProbe'
+  // Spawn-time transport hint; the registry payload keeps reporting the
+  // baseline `streamFormat` only.
+  | 'structuredStreamUpgrade'
 > & {
   models: RuntimeModelOption[];
   modelsSource: RuntimeModelSource;

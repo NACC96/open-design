@@ -245,15 +245,28 @@ export const antigravityAgentDef = {
     if (agentCapabilities.get('antigravity')?.skipPermissions) {
       args.push(ANTIGRAVITY_SKIP_PERMISSIONS_FLAG);
     }
-    if (agentCapabilities.get('antigravity')?.streamJson) {
+    // Only the per-run def from `resolveRuntimeStreamTransport` sets this,
+    // and that same def carries the matching `json-event-stream` parser.
+    if (runtimeContext.structuredStream) {
       args.push('--output-format', 'stream-json');
     }
     args.push('-p', prompt);
     return args;
   },
   promptViaStdin: false,
-  streamFormat: 'json-event-stream',
-  eventParser: 'antigravity',
+  // Baseline every agy build understands: plain stdout. Builds whose `--help`
+  // advertises `--output-format` are upgraded per run to agy's native
+  // stream-json events, which surface tool progress (keeping the inactivity
+  // watchdog fed during long tool calls) and fence automatic retries once a
+  // tool has run. The upgrade also moves the run off API mode onto the
+  // filesystem execution profile: agy edits project files with its own tools,
+  // and on the structured stream the daemon can see those tool calls.
+  streamFormat: 'plain',
+  structuredStreamUpgrade: {
+    capability: 'streamJson',
+    streamFormat: 'json-event-stream',
+    eventParser: 'antigravity',
+  },
   installUrl: 'https://antigravity.google/cli',
   docsUrl: 'https://antigravity.google/docs/cli-overview',
 } satisfies RuntimeAgentDef;

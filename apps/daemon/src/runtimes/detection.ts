@@ -816,6 +816,7 @@ function stripFns(
     inactivityTimeoutMs,
     firstOutputTimeoutMs,
     authProbe,
+    structuredStreamUpgrade,
     ...rest
   } = def;
   return rest;
