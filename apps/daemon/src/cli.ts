@@ -248,7 +248,7 @@ const PROJECT_STRING_FLAGS = new Set([
   'pending-prompt', 'project', 'conversation', 'message', 'prompt',
   'prompt-file', 'task-execution', 'path', 'dir', 'as', 'url',
   'client-request-id',
-  'agent', 'model', 'service-tier', 'snapshot-id', 'inputs', 'grant-caps', 'editor',
+  'agent', 'model', 'reasoning', 'service-tier', 'snapshot-id', 'inputs', 'grant-caps', 'editor',
   'title', 'label', 'against', 'seed-from', 'fork-after', 'mode',
   'source', 'out',
 ]);
@@ -6955,6 +6955,29 @@ async function readRunMessageFromFlags(flags, fallback = null) {
   return fallback;
 }
 
+/**
+ * `od run start|redesign --reasoning <level>` must not be dropped silently.
+ * The run-create response reports how the daemon resolved the level
+ * (`reasoning: { requested, applied, options }`); when it was not applied,
+ * say so on stderr so `--json` stdout stays machine-readable. A daemon that
+ * predates the field reports nothing, and nothing is claimed.
+ */
+function warnIfRequestedReasoningNotApplied(requested, data) {
+  if (typeof requested !== 'string' || !requested) return;
+  const resolution = data?.reasoning;
+  if (!resolution || typeof resolution !== 'object') return;
+  if (resolution.applied === requested) return;
+  const options = Array.isArray(resolution.options)
+    ? resolution.options.filter((id) => typeof id === 'string' && id.length > 0)
+    : [];
+  const hint = options.length > 0
+    ? ` Levels accepted by this agent and model: ${options.join(', ')}.`
+    : ' This agent and model accept no reasoning level.';
+  console.error(
+    `[run] warning: --reasoning ${requested} was not applied; the run uses the agent's default reasoning.${hint}`,
+  );
+}
+
 async function postJsonToDaemon(base, route, body, headers = {}) {
   let resp;
   try {
@@ -7792,10 +7815,10 @@ async function runRun(args) {
                [--prompt-file <path|->] [--task-execution <id>]
                [--client-request-id <id>]
                [--skill <id>[,<id>]] [--plugin <id>] [--inputs <json>] [--grant-caps a,b]
-               [--agent claude|codex|opencode] [--model <id>] [--service-tier <id>]
+               [--agent claude|codex|opencode] [--model <id>] [--reasoning <level>] [--service-tier <id>]
                [--workspace <id> --workspace-member <id>] [--follow] [--json]
   od run redesign [--path <folder>] [--message "<text>" | --prompt-file <path|->]
-               [--agent claude] [--model <id>] [--service-tier <id>] [--follow] [--json]
+               [--agent claude] [--model <id>] [--reasoning <level>] [--service-tier <id>] [--follow] [--json]
   od run watch  <runId>                     ND-JSON event stream on stdout.
   od run cancel <runId>                     Request cancellation.
   od run steer  <runId> [--message "<text>" | --prompt-file <path|->] [--json]
@@ -8048,8 +8071,10 @@ Common options:
         ...(flags.agent ? { agentId: flags.agent } : {}),
         ...(flags.model ? { model: flags.model } : {}),
         ...(flags['service-tier'] ? { serviceTier: flags['service-tier'] } : {}),
+        ...(flags.reasoning ? { reasoning: flags.reasoning } : {}),
       };
       const data = await postJsonToDaemon(base, '/api/runs', body, workspaceHeaders);
+      warnIfRequestedReasoningNotApplied(flags.reasoning, data);
       if (flags.json && !flags.follow) {
         return process.stdout.write(JSON.stringify({
           ...data,
@@ -8083,6 +8108,7 @@ Common options:
       if (flags.agent) body.agentId = flags.agent;
       if (flags.model) body.model = flags.model;
       if (flags['service-tier']) body.serviceTier = flags['service-tier'];
+      if (flags.reasoning) body.reasoning = flags.reasoning;
       if (flags.inputs) {
         try { body.pluginInputs = JSON.parse(flags.inputs); } catch (err) {
           console.error(`--inputs must be valid JSON: ${err.message}`);
@@ -8119,6 +8145,7 @@ Common options:
         console.error(`POST /api/runs failed: ${resp.status} ${JSON.stringify(data)}`);
         process.exit(1);
       }
+      warnIfRequestedReasoningNotApplied(flags.reasoning, data);
       if (flags.json && !flags.follow) {
         return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
       }

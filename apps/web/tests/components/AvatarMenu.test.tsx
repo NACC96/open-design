@@ -401,6 +401,39 @@ describe('AvatarMenu', () => {
     expect(screen.queryByRole('dialog', { name: 'avatar.title' })).toBeNull();
   });
 
+  it('clears a saved effort the next model does not offer when the model changes', () => {
+    const effort = (ids: string[]) => ids.map((id) => ({ id, label: id }));
+    const claude: AgentInfo = {
+      ...claudeAgent,
+      models: [
+        { id: 'claude-opus-4-8', label: 'Opus 4.8', reasoningOptions: effort(['default', 'xhigh']) },
+        { id: 'claude-opus-4-7', label: 'Opus 4.7', reasoningOptions: effort(['default', 'xhigh']) },
+        { id: 'claude-haiku-4-5', label: 'Haiku 4.5', reasoningOptions: [] },
+      ],
+    };
+    const { onAgentModelChange } = renderMenu({
+      config: {
+        ...baseConfig,
+        agentId: 'claude',
+        agentModels: { claude: { model: 'claude-opus-4-8', reasoning: 'xhigh' } },
+      },
+      agents: [claude],
+    });
+
+    openMenu();
+    fireEvent.click(screen.getByTestId('avatar-model-option-claude-haiku-4-5'));
+    const cleared = onAgentModelChange.mock.calls.at(-1)!;
+    expect(cleared[0]).toBe('claude');
+    expect(Object.prototype.hasOwnProperty.call(cleared[1], 'reasoning')).toBe(true);
+    expect(cleared[1].reasoning).toBeUndefined();
+
+    openMenu();
+    fireEvent.click(screen.getByTestId('avatar-model-option-claude-opus-4-7'));
+    const kept = onAgentModelChange.mock.calls.at(-1)!;
+    expect(kept[1]).toMatchObject({ model: 'claude-opus-4-7' });
+    expect(Object.prototype.hasOwnProperty.call(kept[1], 'reasoning')).toBe(false);
+  });
+
   it('keeps a custom saved model visible when it is not in the declared agent model list', () => {
     renderMenu({
       config: {
