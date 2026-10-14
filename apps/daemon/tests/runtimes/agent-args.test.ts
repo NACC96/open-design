@@ -722,13 +722,15 @@ test('antigravity passes prompt via -p argument (print mode)', () => {
 
   assert.equal(antigravity.maxPromptArgBytes, undefined);
 
-  // Include the current High Flash option while retaining legacy choices
-  // for older CLI installs.
+  // Include the current Gemini 3.8 Flash options (labels verbatim from
+  // `agy models`) while retaining legacy choices for older CLI installs.
   assert.deepEqual(
     antigravity.fallbackModels.map((m) => m.id),
     [
       'default',
       'Gemini 3.8 Flash (High)',
+      'Gemini 3.8 Flash (Medium)',
+      'Gemini 3.8 Flash (Low)',
       'Gemini 3.1 Pro (High)',
       'Gemini 3.1 Pro (Low)',
       'Gemini 3.5 Flash (High)',
