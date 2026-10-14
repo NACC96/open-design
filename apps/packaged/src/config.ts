@@ -79,17 +79,43 @@ export type PackagedConfig = {
   webOutputMode: PackagedWebOutputMode;
 };
 
-/** Baked fork policy applies unless the launcher explicitly overrides it. */
-export function resolvePackagedUpdaterEnv(
-  config: Pick<PackagedConfig, 'updateMetadataUrl' | 'updateEnabled'>,
+function hasLaunchValue(env: NodeJS.ProcessEnv, key: string): boolean {
+  const value = env[key];
+  return value != null && value.length > 0;
+}
+
+/**
+ * Installation-wide updater switch baked into the bundle the user launched.
+ *
+ * Apply it to `process.env` before anything spawns or hands off (the sidecar
+ * bootstrap, a delegated launcher payload, the packaged sidecars) so every
+ * later process inherits it. A delegated payload reads its own
+ * open-design-config.json, and an official or pre-opt-out payload has no
+ * `updateEnabled`; the inherited value is what keeps that payload's updater
+ * off. A non-empty launch value always wins.
+ */
+export function resolvePackagedUpdaterPolicyEnv(
+  config: Pick<PackagedConfig, 'updateEnabled'>,
   env: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
-  return {
-    ...(config.updateEnabled != null && !env.OD_UPDATE_ENABLED
-      ? { OD_UPDATE_ENABLED: config.updateEnabled ? '1' : '0' } : {}),
-    ...(config.updateMetadataUrl != null && !env.OD_UPDATE_METADATA_URL
-      ? { OD_UPDATE_METADATA_URL: config.updateMetadataUrl } : {}),
-  };
+  if (config.updateEnabled == null || hasLaunchValue(env, 'OD_UPDATE_ENABLED')) return {};
+  return { OD_UPDATE_ENABLED: config.updateEnabled ? '1' : '0' };
+}
+
+/**
+ * Release-feed override baked into the bundle that actually runs desktop main.
+ *
+ * Unlike the switch above this describes the build, not the installation: a
+ * delegated payload keeps the feed it was built for, so this is applied only
+ * after payload delegation, from the running bundle's config. A non-empty
+ * launch value always wins.
+ */
+export function resolvePackagedUpdaterFeedEnv(
+  config: Pick<PackagedConfig, 'updateMetadataUrl'>,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (config.updateMetadataUrl == null || hasLaunchValue(env, 'OD_UPDATE_METADATA_URL')) return {};
+  return { OD_UPDATE_METADATA_URL: config.updateMetadataUrl };
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
