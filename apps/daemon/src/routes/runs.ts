@@ -11,6 +11,7 @@ import {
   type AppliedPluginSnapshot,
   type ArtifactManifest,
   type ByokChatProviderConfig,
+  type ChatRunReasoningResolution,
   type ChatRunStatus,
   type ChatRunStatusResponse,
   type InstalledPluginRecord,
@@ -57,7 +58,7 @@ import {
   updateProject,
   upsertMessage,
 } from '../db.js';
-import { readVelaLoginStatus } from '../integrations/vela.js';
+import { readVelaLoginStatus, resolveAmrProfile } from '../integrations/vela.js';
 import {
   ensureDetectedRuntimeCapabilities,
   ensureDetectedRuntimeVersions,
@@ -179,6 +180,11 @@ import {
   validateRunToolBundleForAgent,
 } from '../run-tool-bundle.js';
 import type { DetectedAgent, RuntimeAgentDef } from '../runtimes/types.js';
+import {
+  reasoningOptionsForModel,
+  resolveRequestedRunModel,
+  resolveRunReasoningEffort,
+} from '../runtimes/models.js';
 import {
   buildOpenCodeByokProviderConfig,
   BYOK_OPENCODE_AGENT_ID,
@@ -801,6 +807,50 @@ function routeParamId(req: ApiRequest): string | null {
   return typeof req.params.id === 'string' && req.params.id.length > 0
     ? req.params.id
     : null;
+}
+
+/**
+ * Resolve a requested reasoning effort exactly as the run starter will — same
+ * model fallback, same per-model option lists — so the create response can tell
+ * the caller (notably `od run start --reasoning`) whether the level is applied
+ * instead of dropping it silently. This is validation only: the spawn-time
+ * capability gate reports a later omission as a `reasoning_effort_omitted` run
+ * diagnostic.
+ */
+async function resolveRequestedRunReasoning(
+  meta: RunCreateMeta,
+  getAgentDef: (agentId: string) => RuntimeAgentDef | null | undefined,
+  runtimeDataDir: string,
+): Promise<ChatRunReasoningResolution | null> {
+  const requested = typeof meta.reasoning === 'string' && meta.reasoning
+    ? meta.reasoning
+    : null;
+  if (!requested) return null;
+  const def = typeof meta.agentId === 'string' ? getAgentDef(meta.agentId) : null;
+  if (!def) return { requested, applied: null, options: [] };
+  let appConfig: Awaited<ReturnType<typeof readAppConfig>> | null = null;
+  try {
+    appConfig = await readAppConfig(runtimeDataDir);
+  } catch {
+    appConfig = null;
+  }
+  const configuredAgentEnv = agentCliEnvForAgent(appConfig?.agentCliEnv, def.id);
+  const scope = def.id === 'amr'
+    ? resolveAmrProfile({ ...process.env, ...(def.env || {}), ...configuredAgentEnv })
+    : null;
+  const savedModel = appConfig?.agentModels?.[def.id]?.model;
+  const model = resolveRequestedRunModel(
+    def,
+    meta.model,
+    typeof savedModel === 'string' ? savedModel : null,
+    process.env,
+    scope,
+  );
+  return {
+    requested,
+    applied: resolveRunReasoningEffort(def, model, requested, scope),
+    options: reasoningOptionsForModel(def, model, scope).map((option) => option.id),
+  };
 }
 
 function withoutSensitiveRunInput(body: JsonRecord): JsonRecord {
@@ -2345,6 +2395,13 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
     if (!toolBundleSupport.ok) {
       return sendApiError(res, 400, 'BAD_REQUEST', toolBundleSupport.message);
     }
+    // Resolved before the Run is prepared so no await sits between
+    // preparation and the 202 reply.
+    const reasoningResolution = await resolveRequestedRunReasoning(
+      meta,
+      getAgentDef,
+      RUNTIME_DATA_DIR,
+    );
     if (runProject?.metadata) {
       meta.projectMetadata = runProject.metadata;
     }
@@ -3108,6 +3165,7 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
         ...(run.pluginId ? { pluginId: run.pluginId } : {}),
         ...(strategyTask ? { taskExecutionId: strategyTask.taskExecutionId } : {}),
         ...(strategyTask ? { strategyTask } : {}),
+        ...(reasoningResolution ? { reasoning: reasoningResolution } : {}),
       });
     }
     if (preparedRun.kind === 'resume_not_allowed') {
@@ -3189,6 +3247,7 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       ...(run.pluginId ? { pluginId: run.pluginId } : {}),
       ...(strategyTask ? { taskExecutionId: strategyTask.taskExecutionId } : {}),
       ...(strategyTask ? { strategyTask } : {}),
+      ...(reasoningResolution ? { reasoning: reasoningResolution } : {}),
     };
     res.status(202).json(body);
     if (

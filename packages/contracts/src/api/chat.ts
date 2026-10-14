@@ -521,6 +521,24 @@ export interface ChatRunCreateResponse {
   /** Analytics-only data-quality signal; it never changes run reuse semantics. */
   analyticsAttributionMismatch?: boolean;
   strategyTask?: StrategyTaskProjectionV2;
+  /** Present only when the request carried `reasoning`. */
+  reasoning?: ChatRunReasoningResolution;
+}
+
+/**
+ * How the daemon resolved a requested reasoning effort for a new run.
+ *
+ * `applied` is the effort the run forwards after validating `requested`
+ * against the selected agent and model, or `null` when it was dropped (an
+ * unknown level, or one the model does not accept). `options` lists the ids
+ * that agent/model pair does accept. A runtime capability gate can still omit
+ * an applied effort at spawn; that is reported on the run stream as a
+ * `reasoning_effort_omitted` diagnostic.
+ */
+export interface ChatRunReasoningResolution {
+  requested: string;
+  applied: string | null;
+  options: string[];
 }
 
 /**

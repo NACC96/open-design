@@ -68,7 +68,12 @@ import {
 import { ExportDiagnosticsRow } from './ExportDiagnosticsButton';
 import { Icon } from './Icon';
 import { LabsSection } from './LabsSection';
-import { defaultAgentModelId, effectiveAgentModelChoice } from './agentModelSelection';
+import {
+  agentReasoningOptions,
+  defaultAgentModelId,
+  effectiveAgentModelChoice,
+  reasoningPatchForModelChange,
+} from './agentModelSelection';
 import {
   CUSTOM_MODEL_SENTINEL,
   orderModelOptionsByAvailability,
@@ -3970,10 +3975,7 @@ export function SettingsDialog({
       Array.isArray(selected.models) && selected.models.length > 0;
     const configuredModelId =
       cfg.agentModels?.[selected.id]?.model ?? defaultAgentModelId(selected);
-    const modelReasoningOptions = selected.models?.find(
-      (model) => model.id === configuredModelId,
-    )?.reasoningOptions;
-    const activeReasoningOptions = modelReasoningOptions ?? selected.reasoningOptions;
+    const activeReasoningOptions = agentReasoningOptions(selected, configuredModelId);
     const hasReasoning =
       Array.isArray(activeReasoningOptions) &&
       activeReasoningOptions.length > 0;
@@ -4043,11 +4045,12 @@ export function SettingsDialog({
       setCfg((c) => {
         const prev = c.agentModels?.[selected.id] ?? {};
         const merged = { ...prev, ...next };
-        if (
-          Object.prototype.hasOwnProperty.call(next, 'serviceTier') &&
-          next.serviceTier === undefined
-        ) {
-          delete merged.serviceTier;
+        // An own `undefined` clears the saved value (see
+        // `mergeAgentModelChoice`); an absent key keeps it.
+        for (const key of ['reasoning', 'serviceTier'] as const) {
+          if (Object.prototype.hasOwnProperty.call(next, key) && next[key] === undefined) {
+            delete merged[key];
+          }
         }
         return {
           ...c,
@@ -4124,7 +4127,11 @@ export function SettingsDialog({
                         next.add(selected.id);
                         return next;
                       });
-                      setChoice({ model: '', serviceTier: undefined });
+                      setChoice({
+                        model: '',
+                        serviceTier: undefined,
+                        ...reasoningPatchForModelChange(selected, '', choice.reasoning),
+                      });
                     } else {
                       setAgentCustomModelIds((prev) => {
                         if (!prev.has(selected.id)) return prev;
@@ -4142,6 +4149,11 @@ export function SettingsDialog({
                         )
                           ? choice.serviceTier
                           : undefined,
+                        ...reasoningPatchForModelChange(
+                          selected,
+                          nextValue,
+                          choice.reasoning,
+                        ),
                       });
                     }
                   }}
@@ -4191,9 +4203,14 @@ export function SettingsDialog({
               type="text"
               value={modelValue}
               placeholder={t('settings.modelCustomPlaceholder')}
-              onChange={(e) =>
-                setChoice({ model: e.target.value.trim(), serviceTier: undefined })
-              }
+              onChange={(e) => {
+                const nextModel = e.target.value.trim();
+                setChoice({
+                  model: nextModel,
+                  serviceTier: undefined,
+                  ...reasoningPatchForModelChange(selected, nextModel, choice.reasoning),
+                });
+              }}
             />
           </label>
         ) : null}

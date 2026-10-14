@@ -150,6 +150,23 @@ export function isKnownServiceTier(
   );
 }
 
+/**
+ * The reasoning options a run may forward for `modelId`. A known model's own
+ * list wins — including an explicit empty list, which marks a model that takes
+ * no effort at all — and the agent-level list covers runs with no model
+ * (`null` keeps the CLI's configured model) or with an id the catalog does not
+ * know.
+ */
+export function reasoningOptionsForModel(
+  def: RuntimeAgentDef,
+  modelId: string | null | undefined,
+  scope?: string | null,
+): RuntimeModelOption[] {
+  const modelOptions = findKnownModel(def, modelId, scope)?.reasoningOptions;
+  if (Array.isArray(modelOptions)) return modelOptions;
+  return def.reasoningOptions ?? [];
+}
+
 export function isKnownReasoningEffort(
   def: RuntimeAgentDef,
   modelId: string | null | undefined,
@@ -157,11 +174,51 @@ export function isKnownReasoningEffort(
   scope?: string | null,
 ): boolean {
   if (!reasoningEffort) return false;
-  const modelOptions = findKnownModel(def, modelId, scope)?.reasoningOptions;
-  if (Array.isArray(modelOptions)) {
-    return modelOptions.some((option) => option.id === reasoningEffort);
-  }
-  return Boolean(def.reasoningOptions?.some((option) => option.id === reasoningEffort));
+  return reasoningOptionsForModel(def, modelId, scope).some(
+    (option) => option.id === reasoningEffort,
+  );
+}
+
+/**
+ * The model a chat run resolves for a request: a known or safe custom id from
+ * the request, otherwise the saved per-agent choice, then the agent's own
+ * fallback rule. The run starter and the run-create route both call this, so
+ * the effort reported back to a caller is validated against the same model the
+ * spawn uses.
+ */
+export function resolveRequestedRunModel(
+  def: RuntimeAgentDef,
+  requestedModel: unknown,
+  configuredModel: string | null,
+  env: Record<string, string | undefined> = process.env,
+  scope?: string | null,
+): string | null {
+  return resolveModelForAgent(
+    def,
+    typeof requestedModel === 'string'
+      ? isKnownModel(def, requestedModel, scope)
+        ? requestedModel
+        : sanitizeCustomModel(requestedModel)
+      : configuredModel,
+    env,
+    scope,
+  );
+}
+
+/**
+ * The reasoning effort a run forwards: the requested id when the resolved
+ * model (or the agent, when no model is known) lists it, otherwise `null`.
+ */
+export function resolveRunReasoningEffort(
+  def: RuntimeAgentDef,
+  modelId: string | null | undefined,
+  reasoning: unknown,
+  scope?: string | null,
+): string | null {
+  return typeof reasoning === 'string'
+    && isKnownReasoningEffort(def, modelId, reasoning, scope)
+    ? reasoning
+    : null;
 }
 
 export function resolveModelForServiceTier(

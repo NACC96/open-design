@@ -227,6 +227,13 @@ export type RuntimeAgentDef = {
     env: RuntimeEnv,
   ) => Promise<RuntimeModelOption[] | null>;
   reasoningOptions?: RuntimeReasoningOption[];
+  // Capability key (from `capabilityFlags`) the installed CLI must advertise
+  // before a non-default reasoning effort is forwarded. When set, the chat run
+  // confirms it through the `--help` probe — re-reading once when the cached
+  // answer is missing — and omits the effort with a run diagnostic when
+  // support is not confirmed, instead of letting an older CLI abort on an
+  // unknown option.
+  reasoningCapability?: string;
   supportsImagePaths?: boolean;
   maxPromptArgBytes?: number;
   mcpDiscovery?: string;
@@ -372,6 +379,7 @@ export type DetectedAgent = Omit<
   | 'helpArgs'
   | 'capabilityFlags'
   | 'hiddenCapabilityFlags'
+  | 'reasoningCapability'
   | 'fallbackBins'
   | 'versionProbeTimeoutMs'
   | 'versionPolicy'

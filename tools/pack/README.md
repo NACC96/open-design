@@ -55,7 +55,9 @@ path propagation, you MUST read that section; this README MUST NOT restate it.
 
 Packaged desktop checks release metadata, verifies the downloaded artifact, and exposes update actions through desktop
 IPC. Launcher-based builds prefer verified payload activation followed by relaunch; installer replacement remains the
-fallback for artifact types and older builds that cannot apply a payload in place.
+fallback for artifact types and older builds that cannot apply a payload in place. Fork builds can opt out of the
+updater at build time with `OD_UPDATE_ENABLED=0 tools-pack mac build`; see
+[`docs/packaged-updater-policy.md`](../../docs/packaged-updater-policy.md).
 
 Electron-builder resources live under `tools/pack/resources/mac/`. The current logo is staged there as the mac icon/DMG
 placeholder so future design-provided assets can replace the resource files without changing packaging code.

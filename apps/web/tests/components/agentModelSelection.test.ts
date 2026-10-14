@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentModelIsSelectable,
+  agentReasoningOptions,
   defaultAgentModelId,
   effectiveAgentModelChoice,
   effectiveAgentModelId,
   normalizeAgentModelChoice,
+  reasoningPatchForModelChange,
 } from '../../src/components/agentModelSelection';
 import type { AgentInfo } from '../../src/types';
 
@@ -185,5 +187,40 @@ describe('agent model selection', () => {
       model: 'custom-codex-model',
       reasoning: 'high',
     });
+  });
+});
+
+describe('reasoning options across a model change', () => {
+  const effort = (ids: string[]) => ids.map((id) => ({ id, label: id }));
+  const claudeAgent: AgentInfo = {
+    id: 'claude',
+    name: 'Claude Code',
+    bin: 'claude',
+    available: true,
+    models: [
+      { id: 'default', label: 'Default', reasoningOptions: effort(['default', 'xhigh', 'max']) },
+      { id: 'claude-opus-4-6', label: 'Opus 4.6', reasoningOptions: effort(['default', 'max']) },
+      { id: 'claude-haiku-4-5', label: 'Haiku 4.5', reasoningOptions: [] },
+    ],
+    reasoningOptions: effort(['default', 'low', 'xhigh', 'max']),
+  };
+
+  it("prefers the model's own list, including an explicit empty one", () => {
+    expect(agentReasoningOptions(claudeAgent, 'claude-opus-4-6')?.map((o) => o.id)).toEqual(['default', 'max']);
+    expect(agentReasoningOptions(claudeAgent, 'claude-haiku-4-5')).toEqual([]);
+  });
+
+  it('falls back to the agent list for an id the catalog does not list', () => {
+    expect(agentReasoningOptions(claudeAgent, 'claude-custom')?.map((o) => o.id)).toEqual([
+      'default', 'low', 'xhigh', 'max',
+    ]);
+  });
+
+  it('clears a saved level the next model does not offer and keeps one it does', () => {
+    expect(reasoningPatchForModelChange(claudeAgent, 'claude-opus-4-6', 'xhigh')).toEqual({ reasoning: undefined });
+    expect(reasoningPatchForModelChange(claudeAgent, 'claude-haiku-4-5', 'max')).toEqual({ reasoning: undefined });
+    expect(reasoningPatchForModelChange(claudeAgent, 'claude-opus-4-6', 'max')).toEqual({});
+    expect(reasoningPatchForModelChange(claudeAgent, 'claude-custom', 'low')).toEqual({});
+    expect(reasoningPatchForModelChange(claudeAgent, 'claude-opus-4-6', undefined)).toEqual({});
   });
 });

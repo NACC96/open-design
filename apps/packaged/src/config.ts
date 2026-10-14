@@ -36,6 +36,7 @@ export type RawPackagedConfig = {
   // the daemon at runtime; Langfuse credentials never ship in packaged config.
   telemetryRelayUrl?: string;
   updateMetadataUrl?: string;
+  updateEnabled?: boolean;
   // PostHog product-analytics ingest key, baked by tools/pack from
   // process.env.POSTHOG_KEY at packaging time. Forwarded to the daemon
   // sidecar's spawn env as POSTHOG_KEY. `phc_` keys are public ingest
@@ -68,6 +69,7 @@ export type PackagedConfig = {
   resourceRoot: string;
   telemetryRelayUrl: string | null;
   updateMetadataUrl: string | null;
+  updateEnabled?: boolean;
   posthogKey: string | null;
   posthogHost: string | null;
   velaWebUrl: string | null;
@@ -76,6 +78,45 @@ export type PackagedConfig = {
   webStandaloneRoot: string | null;
   webOutputMode: PackagedWebOutputMode;
 };
+
+function hasLaunchValue(env: NodeJS.ProcessEnv, key: string): boolean {
+  const value = env[key];
+  return value != null && value.length > 0;
+}
+
+/**
+ * Installation-wide updater switch baked into the bundle the user launched.
+ *
+ * Apply it to `process.env` before anything spawns or hands off (the sidecar
+ * bootstrap, a delegated launcher payload, the packaged sidecars) so every
+ * later process inherits it. A delegated payload reads its own
+ * open-design-config.json, and an official or pre-opt-out payload has no
+ * `updateEnabled`; the inherited value is what keeps that payload's updater
+ * off. A non-empty launch value always wins.
+ */
+export function resolvePackagedUpdaterPolicyEnv(
+  config: Pick<PackagedConfig, 'updateEnabled'>,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (config.updateEnabled == null || hasLaunchValue(env, 'OD_UPDATE_ENABLED')) return {};
+  return { OD_UPDATE_ENABLED: config.updateEnabled ? '1' : '0' };
+}
+
+/**
+ * Release-feed override baked into the bundle that actually runs desktop main.
+ *
+ * Unlike the switch above this describes the build, not the installation: a
+ * delegated payload keeps the feed it was built for, so this is applied only
+ * after payload delegation, from the running bundle's config. A non-empty
+ * launch value always wins.
+ */
+export function resolvePackagedUpdaterFeedEnv(
+  config: Pick<PackagedConfig, 'updateMetadataUrl'>,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (config.updateMetadataUrl == null || hasLaunchValue(env, 'OD_UPDATE_METADATA_URL')) return {};
+  return { OD_UPDATE_METADATA_URL: config.updateMetadataUrl };
+}
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -227,6 +268,7 @@ export async function readPackagedConfig(): Promise<PackagedConfig> {
     resourceRoot,
     telemetryRelayUrl: cleanOptionalString(raw.telemetryRelayUrl),
     updateMetadataUrl: cleanOptionalString(raw.updateMetadataUrl),
+    ...(typeof raw.updateEnabled === 'boolean' ? { updateEnabled: raw.updateEnabled } : {}),
     posthogKey: cleanOptionalString(raw.posthogKey),
     posthogHost: cleanOptionalString(raw.posthogHost),
     velaWebUrl: cleanOptionalString(raw.velaWebUrl),
