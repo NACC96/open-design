@@ -248,7 +248,6 @@ import {
   detectAgents,
   getAgentDef,
   isKnownModel,
-  isKnownReasoningEffort,
   isKnownServiceTier,
   openDesignAmrRunAttempt,
   openDesignAmrTraceEnv,
@@ -263,8 +262,9 @@ import {
   preferFreshLiveModels,
   rememberLiveModels,
   resolveDefaultModelFromOptions,
-  resolveModelForAgent,
   resolveModelForServiceTier,
+  resolveRequestedRunModel,
+  resolveRunReasoningEffort,
 } from './runtimes/models.js';
 import { loadMmdRouteLaunchEnv } from './runtimes/mmd-routes.js';
 import { withAcpHandshakeFailureGuidance } from './runtimes/acp-handshake-failure.js';
@@ -512,6 +512,7 @@ import {
   getDetectedRuntimeVersions,
   ensureDetectedRuntimeCapabilities,
 } from './runtimes/detection.js';
+import { confirmReasoningCapability } from './runtimes/reasoning-capability.js';
 import { resolveBundledOdNextRuntimeCapability } from './runtimes/od-next-capability-gate.js';
 import {
   createOdNextNativeBuildPackageBindings,
@@ -11934,13 +11935,10 @@ export async function startServer({
       typeof appConfigForRun?.agentModels?.[def.id]?.model === 'string'
         ? appConfigForRun.agentModels[def.id].model
         : null;
-    let safeModel = resolveModelForAgent(
+    let safeModel = resolveRequestedRunModel(
       def,
-      typeof requestedRuntimeModel === 'string'
-        ? isKnownModel(def, requestedRuntimeModel, requestedLiveModelScope)
-          ? requestedRuntimeModel
-          : sanitizeCustomModel(requestedRuntimeModel)
-        : configuredModel,
+      requestedRuntimeModel,
+      configuredModel,
       process.env,
       requestedLiveModelScope,
     );
@@ -11949,11 +11947,12 @@ export async function startServer({
       typeof process.env[def.defaultModelEnvVar] === 'string' &&
       process.env[def.defaultModelEnvVar]?.trim(),
     );
-    const safeReasoning =
-      typeof reasoning === 'string' &&
-      isKnownReasoningEffort(def, safeModel, reasoning, requestedLiveModelScope)
-        ? reasoning
-        : null;
+    let safeReasoning = resolveRunReasoningEffort(
+      def,
+      safeModel,
+      reasoning,
+      requestedLiveModelScope,
+    );
     safeModel = resolveModelForServiceTier(
       def,
       safeModel,
@@ -13708,6 +13707,21 @@ export async function startServer({
       // to be filled only by `GET /api/agents`. Probe it here so a daemon that
       // has never served that route still builds the same argv as one that has.
       await ensureDetectedRuntimeCapabilities(def.id, configuredAgentEnv);
+      // A validated effort still needs the installed CLI to confirm the flag
+      // that carries it. When it does not (or cannot answer even after one
+      // re-probe), drop the effort and say so instead of handing an older
+      // build an option it would abort on.
+      const reasoningOmission = await confirmReasoningCapability(
+        def,
+        agentOptions.reasoning,
+        configuredAgentEnv,
+      );
+      if (reasoningOmission) {
+        agentOptions.reasoning = null;
+        safeReasoning = null;
+        console.warn(`[run ${run.id}] ${reasoningOmission.message}`);
+        design.runs.emit(run, 'diagnostic', reasoningOmission);
+      }
       args = def.buildArgs(
         composed,
         promptImagePaths,

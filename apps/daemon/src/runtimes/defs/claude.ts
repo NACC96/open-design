@@ -79,6 +79,16 @@ export const claudeAgentDef = {
     // picker, then keep the built-in aliases as fallback hints.
     fallbackModels: CLAUDE_FALLBACK_MODELS,
     fetchModels: async (_resolvedBin, env) => loadMmdRouteModels(env, CLAUDE_FALLBACK_MODELS),
+    // Agent-level effort list for runs that carry no model (`model: null`
+    // keeps Claude Code's own configured model) and for custom or proxy model
+    // ids the catalog does not know. Claude Code clamps an effort a model
+    // cannot use. Legacy models that never accepted `--effort` keep their
+    // explicit empty per-model list, which takes precedence over this one.
+    reasoningOptions: CLAUDE_EFFORT_OPTIONS,
+    // `--effort` only exists in newer Claude Code builds. The chat run
+    // confirms this capability (re-probing `--help` once when the cached
+    // answer is missing) before it forwards a non-default effort.
+    reasoningCapability: 'effort',
     // Prompt delivered via stdin to avoid both Linux `spawn E2BIG`
     // (MAX_ARG_STRLEN caps a single argv entry at ~128 KB) and Windows
     // `spawn ENAMETOOLONG` (CreateProcess caps the full command line at
@@ -123,13 +133,18 @@ export const claudeAgentDef = {
         args.push('--model', options.model);
       }
       if (options.reasoning && options.reasoning !== 'default') {
-        if (caps.effort === false) {
-          throw new TypeError('This Claude CLI does not advertise --effort. Update Claude Code or select CLI default reasoning.');
-        }
         if (!CLAUDE_EFFORT_OPTIONS.some((option) => option.id === options.reasoning)) {
           throw new TypeError('Unsupported Claude reasoning effort.');
         }
-        args.push('--effort', options.reasoning);
+        // Same rule as the other optional flags above: only forward what the
+        // installed build positively advertised. An older CLI rejects an
+        // unknown option and kills the run, so an unknown answer (a `--help`
+        // probe that timed out or failed) omits the flag too. The chat run
+        // re-probes before this point and reports any omission as a
+        // `reasoning_effort_omitted` diagnostic.
+        if (caps.effort === true) {
+          args.push('--effort', options.reasoning);
+        }
       }
       const nativeBindings = runtimeContext.nativeBuildPackageBindings ?? [];
       if (nativeBindings.length > 0) {
