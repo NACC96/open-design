@@ -33,7 +33,11 @@ import { releaseChannelFromNamespace, releaseChannelFromVersion } from "@open-de
 import { join } from "node:path";
 import { app, dialog } from "electron";
 
-import { readPackagedConfig } from "./config.js";
+import {
+  readPackagedConfig,
+  resolvePackagedUpdaterFeedEnv,
+  resolvePackagedUpdaterPolicyEnv,
+} from "./config.js";
 import {
   claimPackagedDownloadAttribution,
   discoverPackagedDownloadAttribution,
@@ -100,14 +104,11 @@ let startupTelemetryContext:
     }
   | null = null;
 
-function applyPackagedUpdaterEnv(updateMetadataUrl: string | null): void {
-  if (updateMetadataUrl == null) return;
-  if (process.env.OD_UPDATE_METADATA_URL != null && process.env.OD_UPDATE_METADATA_URL.length > 0) return;
-  process.env.OD_UPDATE_METADATA_URL = updateMetadataUrl;
-}
-
 async function main(): Promise<void> {
   const config = await readPackagedConfig();
+  // Before any bootstrap, payload delegation, or sidecar spawn: every process
+  // this launch hands off to must inherit the launched bundle's opt-out.
+  Object.assign(process.env, resolvePackagedUpdaterPolicyEnv(config, process.env));
   const headlessRequest = parsePackagedHeadlessRequest(process.argv.slice(1));
 
   // Must run BEFORE `app.whenReady()` below, because Chromium consumes
@@ -310,7 +311,7 @@ async function main(): Promise<void> {
     platform: process.platform,
   });
   applyPackagedElectronPathOverrides(paths);
-  applyPackagedUpdaterEnv(activeConfig.updateMetadataUrl);
+  Object.assign(process.env, resolvePackagedUpdaterFeedEnv(activeConfig, process.env));
   if (!claimPackagedSingleInstanceLock(app, (argv) => {
     secondInstanceHandoff.handle(findPackagedDeeplinkArg(argv));
   })) {

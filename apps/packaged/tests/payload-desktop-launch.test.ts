@@ -1,11 +1,13 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { parseLauncherAfterQuitArgs, parseLauncherDelegatedArgs } from "@open-design/launcher-proto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { resolvePackagedUpdaterPolicyEnv } from "../src/config.js";
 import type { PackagedLauncherRuntime } from "../src/launcher-runtime.js";
 import {
   findPackagedDeeplinkArg,
@@ -238,5 +240,54 @@ describe("payload desktop delegation", () => {
     } finally {
       await rm(root, { force: true, recursive: true });
     }
+  });
+});
+
+describe("payload delegation updater policy", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("hands the launched bundle's opt-out to a payload whose config has none", async () => {
+    const root = await mkdtemp(join(tmpdir(), "od-delegated-updater-policy-"));
+    try {
+      vi.stubEnv("OD_UPDATE_ENABLED", "");
+      Object.assign(process.env, resolvePackagedUpdaterPolicyEnv({ updateEnabled: false }, process.env));
+      const runtime: PackagedLauncherRuntime = {
+        ...fakeRuntime(false),
+        launcherPaths: {
+          attemptsPath: join(root, "state", "attempt.json"),
+          channel: "beta",
+          namespace: "release-beta",
+        } as PackagedLauncherRuntime["launcherPaths"],
+      };
+      let handedEnv: NodeJS.ProcessEnv | undefined;
+      await launchPackagedPayloadDesktop(runtime, {
+        handoff: vi.fn(async (request: { env?: NodeJS.ProcessEnv }) => {
+          handedEnv = { ...request.env };
+        }),
+      });
+
+      expect(handedEnv?.OD_UPDATE_ENABLED).toBe("0");
+      // The payload's own resolution must not replace the inherited value.
+      expect(resolvePackagedUpdaterPolicyEnv({}, handedEnv ?? {})).toEqual({});
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("applies the switch before any handoff and the feed only after delegation", () => {
+    const main = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../src/index.ts"),
+      "utf8",
+    );
+    const policy = main.indexOf("resolvePackagedUpdaterPolicyEnv(config, process.env)");
+    const bootstrap = main.indexOf("bootstrapSidecarProcess(launchStamp");
+    const delegation = main.indexOf("launchPackagedPayloadDesktop(launcherRuntime");
+    const feed = main.indexOf("resolvePackagedUpdaterFeedEnv(activeConfig, process.env)");
+    expect(policy).toBeGreaterThan(main.indexOf("await readPackagedConfig()"));
+    expect(bootstrap).toBeGreaterThan(policy);
+    expect(delegation).toBeGreaterThan(policy);
+    expect(feed).toBeGreaterThan(delegation);
   });
 });

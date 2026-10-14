@@ -1,5 +1,6 @@
 import { ToolPackCache } from "../cache/index.js";
 import type { ToolPackConfig } from "../config/index.js";
+import { resolveBakedUpdaterPolicy } from "../updates/updater-policy.js";
 import { collectWorkspaceTarballs, copyResourceTree, writeAssembledApp } from "./app.js";
 import { seedPackagedAppConfig } from "./app-config.js";
 import { finalizeMacArtifacts } from "./artifacts.js";
@@ -19,6 +20,14 @@ function logMacBuildProgress(message: string, fields: Record<string, unknown> = 
 }
 
 export async function packMac(config: ToolPackConfig): Promise<MacPackResult> {
+  // Resolve before any phase runs so a refused release-namespace opt-out
+  // fails in seconds instead of after the workspace build.
+  if (resolveBakedUpdaterPolicy(config) != null) {
+    logMacBuildProgress(
+      "updater opt-out: baking updateEnabled=false into open-design-config.json; the packaged updater stays off unless launched with OD_UPDATE_ENABLED set",
+      { namespace: config.namespace },
+    );
+  }
   const paths = resolveMacPaths(config);
   const targets = resolveElectronBuilderTargets(config.to as MacBuildOutput);
   const cache = new ToolPackCache(config.roots.cacheRoot);

@@ -159,6 +159,14 @@ export type ToolPackConfig = {
   posthogCliProjectId?: string;
   updateMetadataUrl?: string;
   /**
+   * Explicit packaged updater switch, sourced from `OD_UPDATE_ENABLED` at
+   * packaging time. Undefined when the variable is unset or empty. Only an
+   * opt-out (`false`) is ever baked into open-design-config.json — see
+   * `resolveBakedUpdaterPolicy` in `updates/updater-policy.ts` for the bake
+   * rule and the release-namespace guard.
+   */
+  updateEnabled?: boolean;
+  /**
    * PostHog **management** host used by `@posthog/cli sourcemap upload`. This
    * is the regional app host (e.g. `https://us.posthog.com`) — distinct from
    * `posthogHost` above, which is the **ingest** host (`us.i.posthog.com`)
@@ -359,6 +367,19 @@ function resolveToolPackUpdateMetadataUrl(value: string | undefined): string | u
   return normalized;
 }
 
+/**
+ * Accepts exactly the vocabulary the packaged desktop runtime accepts for the
+ * same variable (`isTruthyEnv` in apps/desktop/src/main/updater/config.ts):
+ * `1/true/yes`, `0/false/no`, unset or empty. Anything else fails the build
+ * instead of silently producing a package with the updater left on.
+ */
+function resolveToolPackUpdateEnabled(value: string | undefined): boolean | undefined {
+  if (value == null || value.length === 0) return undefined;
+  if (value === "1" || value === "true" || value === "yes") return true;
+  if (value === "0" || value === "false" || value === "no") return false;
+  throw new Error(`OD_UPDATE_ENABLED must be one of 1/0/true/false/yes/no: ${value}`);
+}
+
 function resolveElectronVersion(workspaceRoot: string): string {
   const require = createRequire(join(workspaceRoot, "apps/desktop/package.json"));
   const desktopPackage = require(join(workspaceRoot, "apps/desktop/package.json")) as {
@@ -436,6 +457,7 @@ export function resolveToolPackConfig(
     amrProfile: resolveToolPackAmrProfile(process.env.OPEN_DESIGN_AMR_PROFILE),
     telemetryRelayUrl: resolveToolPackTelemetryRelayUrl(process.env.OPEN_DESIGN_TELEMETRY_RELAY_URL),
     updateMetadataUrl: resolveToolPackUpdateMetadataUrl(process.env.OD_UPDATE_METADATA_URL),
+    updateEnabled: resolveToolPackUpdateEnabled(process.env.OD_UPDATE_ENABLED),
     posthogKey: resolveToolPackPosthogKey(process.env.POSTHOG_KEY),
     posthogHost: resolveToolPackPosthogHost(process.env.POSTHOG_HOST),
     velaWebUrl: resolveToolPackVelaWebUrl(process.env.OD_VELA_WEB_URL),
