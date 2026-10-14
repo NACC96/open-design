@@ -147,6 +147,14 @@ definitions currently group by transport as follows:
 | `dsh-profile-jsonl` | `deepseek-harness` |
 | `plain` | `aider`, `antigravity`, `atomcode`, `deepseek`, `grok-build`, `qwen` |
 
+`antigravity` lists its baseline. A def may declare a `structuredStreamUpgrade`
+(`runtimes/types.ts`): when the installed CLI's `--help` advertises the named
+capability, `resolveRuntimeStreamTransport` (`runtimes/stream-transport.ts`)
+switches that run to the structured stream. For `agy` builds that advertise
+`--output-format`, a run uses `json-event-stream` with the `antigravity` parser.
+The run's prompt profile, parser, and argv all come from that one per-run
+decision, and local profiles built on the adapter inherit it.
+
 `byok-opencode` is the API-backed OpenCode-compatible profile rather than an
 additional local executable. User-defined local profiles may extend the base
 registry at runtime. Gemini remains available as a BYOK provider and MCP client

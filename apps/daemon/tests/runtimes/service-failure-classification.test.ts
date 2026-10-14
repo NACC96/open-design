@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classifyAgentServiceFailure } from '../../src/runtimes/auth.js';
+import {
+  antigravityAuthGuidance,
+  antigravityQuotaGuidance,
+  classifyAgentServiceFailure,
+  classifyAntigravitySilentExit,
+} from '../../src/runtimes/auth.js';
 
 describe('classifyAgentServiceFailure', () => {
   it('classifies the official DeepSeek Harness missing-credential failure', () => {
@@ -137,5 +142,31 @@ describe('classifyAgentServiceFailure', () => {
     ]) {
       expect(classifyAgentServiceFailure(text)).toBeNull();
     }
+  });
+});
+
+describe('classifyAntigravitySilentExit', () => {
+  const quota = 'upstream error: code = 429 RESOURCE_EXHAUSTED: Individual quota reached';
+  const auth = 'error getting token source: You are not logged into Antigravity';
+
+  it('reads sign-in and quota verdicts from the agy log text', () => {
+    for (const cliPrintedNothing of [true, false]) {
+      expect(classifyAntigravitySilentExit(auth, { cliPrintedNothing })?.code)
+        .toBe('AGENT_AUTH_REQUIRED');
+      expect(classifyAntigravitySilentExit(quota, { cliPrintedNothing })).toEqual({
+        code: 'RATE_LIMITED',
+        message: antigravityQuotaGuidance(),
+      });
+    }
+  });
+
+  it('assumes missing sign-in only when the CLI printed nothing at all', () => {
+    expect(classifyAntigravitySilentExit('', { cliPrintedNothing: true })).toEqual({
+      code: 'AGENT_AUTH_REQUIRED',
+      message: antigravityAuthGuidance(),
+    });
+    // A run that streamed protocol frames got past sign-in; an unexplained
+    // empty turn there is left to the generic empty-output message.
+    expect(classifyAntigravitySilentExit('', { cliPrintedNothing: false })).toBeNull();
   });
 });

@@ -4141,6 +4141,11 @@ if (args[0] === '--version') {
   console.log('1.0.3-test');
   process.exit(0);
 }
+if (args[0] === '--help') {
+  // agy 1.0.3 help: no --output-format, so the test stays on plain stdout.
+  console.log('Usage: agy [options]\\n  -p, --print\\n  --log-file <path>');
+  process.exit(0);
+}
 const logIdx = args.indexOf('--log-file');
 const logPath = logIdx !== -1 ? args[logIdx + 1] : null;
 let stdin = '';
@@ -4203,6 +4208,56 @@ process.stdin.on('end', () => {
       expect(result.kind).toBe('agent_auth_required');
       expect(result.kind).not.toBe('unknown');
     });
+  });
+
+  // The smoke test must pick its argv and its stream parser from one
+  // transport decision. A healthy agy is a success on both builds: a legacy
+  // build (no `--output-format` in `--help`) answers in plain stdout, and a
+  // streaming build that nobody has probed yet (empty capability cache) is
+  // probed first and answers in stream-json. Pairing a plain argv with the
+  // stream-json parser reported both as "sign in to Antigravity".
+  const transportAgyScript = (supportsStream: boolean, argvFile: string) => `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('1.3.4-test'); process.exit(0); }
+if (args[0] === '--help') {
+  console.log(${JSON.stringify(supportsStream)}
+    ? 'Usage: agy [options]\\n  -p, --print\\n  --log-file <path>\\n  --output-format <text|json|stream-json>'
+    : 'Usage: agy [options]\\n  -p, --print\\n  --log-file <path>');
+  process.exit(0);
+}
+fs.writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(args));
+if (args.includes('--output-format')) {
+  if (!${JSON.stringify(supportsStream)}) {
+    process.stderr.write('unknown flag: --output-format\\n');
+    process.exit(2);
+  }
+  const emit = (event) => process.stdout.write(JSON.stringify(event) + '\\n');
+  emit({ event: 'init', conversation_id: 'conn-test', init: {} });
+  emit({ event: 'step_update', step_update: { conversation_id: 'conn-test', step_index: 1, step_type: 'agent_response', state: 'DONE', text_delta: 'ok' } });
+  emit({ event: 'result', result: { conversation_id: 'conn-test', status: 'SUCCESS', response: 'ok' } });
+  process.exit(0);
+}
+console.log('ok');
+process.exit(0);
+`;
+
+  it.each([
+    { build: 'legacy', supportsStream: false, expectStreamFlag: false },
+    { build: 'unprobed streaming', supportsStream: true, expectStreamFlag: true },
+  ])('reports a healthy $build agy as success', async ({ supportsStream, expectStreamFlag }) => {
+    const argvDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-agy-argv-'));
+    const argvFile = path.join(argvDir, 'argv.json');
+    try {
+      await withFakeAntigravity(transportAgyScript(supportsStream, argvFile), async () => {
+        const result = await testAgentConnection({ agentId: 'antigravity' });
+        expect(result).toMatchObject({ ok: true, kind: 'success' });
+        const argv = JSON.parse(await fsp.readFile(argvFile, 'utf8')) as string[];
+        expect(argv.includes('--output-format')).toBe(expectStreamFlag);
+      });
+    } finally {
+      await fsp.rm(argvDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps OpenCode smoke tests green when git bootstrap is unavailable', async () => {
