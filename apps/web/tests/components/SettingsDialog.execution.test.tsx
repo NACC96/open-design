@@ -2933,6 +2933,50 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     expect(customModelInput.value).toBe('');
   });
 
+  it('drops a saved effort the next model does not offer, so switching back does not revive it', () => {
+    const effort = (ids: string[]) => ids.map((id) => ({ id, label: id }));
+    renderSettingsDialog(
+      {
+        mode: 'daemon',
+        agentId: 'claude',
+        agentModels: { claude: { model: 'claude-opus-4-8', reasoning: 'xhigh' } },
+      },
+      {
+        agents: [
+          {
+            id: 'claude',
+            name: 'Claude Code',
+            bin: 'claude',
+            available: true,
+            version: '2.1.299',
+            models: [
+              { id: 'claude-opus-4-8', label: 'Opus 4.8', reasoningOptions: effort(['default', 'high', 'xhigh']) },
+              { id: 'claude-opus-4-6', label: 'Opus 4.6', reasoningOptions: effort(['default', 'high']) },
+            ],
+          },
+        ],
+      },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI/i }));
+    const reasoning = () =>
+      screen.getByLabelText(en['settings.reasoningPicker']) as HTMLSelectElement;
+    const pickModel = (name: RegExp) => {
+      fireEvent.click(screen.getByRole('combobox', { name: en['settings.modelPicker'] }));
+      const popover = screen.getByTestId('settings-agent-model-popover-claude');
+      fireEvent.click(within(popover).getByRole('option', { name }));
+    };
+    expect(reasoning().value).toBe('xhigh');
+
+    pickModel(/Opus 4\.6/);
+    expect(reasoning().value).toBe('default');
+
+    // Before the fix the stored choice still held `xhigh`, and this switch
+    // silently re-applied a level the user had not picked again.
+    pickModel(/Opus 4\.8/);
+    expect(reasoning().value).toBe('default');
+  });
+
   it('labels live CLI model metadata in the model picker', () => {
     renderSettingsDialog(
       { mode: 'daemon', agentId: 'codex' },

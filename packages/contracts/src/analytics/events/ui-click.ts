@@ -59,18 +59,26 @@ export interface ExecutionSettingsPopoverClickProps {
     // `byok_provider_option` so mode-switch funnels line up.
     | 'byok_provider_tab'
     | 'model_dropdown'
+    // Local CLI reasoning-effort select, shown for any agent whose selected
+    // model (or the agent itself) publishes effort options.
+    | 'reasoning_dropdown'
     | 'open_execution_settings';
-  // `agent_card`: which CLI agent row was picked, normalized via
-  // `agentIdToTracking` (never the raw kebab-case daemon id).
+  // `agent_card`: which CLI agent row was picked; `reasoning_dropdown`: which
+  // CLI agent's effort list was used. Normalized via `agentIdToTracking`
+  // (never the raw kebab-case daemon id).
   cli_provider_id?: TrackingCliProviderId;
   // `byok_provider_tab` / BYOK `model_dropdown`: the protocol tab, mapped via
   // `byokProtocolToTracking`; omitted when the protocol is outside the v2
   // catalogue (e.g. aihubmix) so an unmapped value never ships.
   provider_id?: TrackingByokProviderId;
   // `model_dropdown`: the picked model id (`modelIdForTracking`).
+  // `reasoning_dropdown`: the model the effort applies to.
   model_id?: string;
-  // `model_dropdown`: which mode's dropdown was used.
+  // `model_dropdown` / `reasoning_dropdown`: which mode's dropdown was used.
   execution_mode?: TrackingExecutionMode;
+  // `reasoning_dropdown`: the picked effort id from the agent's own option
+  // list (e.g. `default`, `low`, `max`) — a fixed vocabulary, never free text.
+  reasoning_effort?: string;
 }
 
 // Items inside the header gear settings popover (EntrySettingsMenu): the

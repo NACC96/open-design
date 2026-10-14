@@ -427,11 +427,12 @@ export function mergeAgentModelChoice(
   next: { model?: string; reasoning?: string; serviceTier?: string },
 ): AgentModelChoice {
   const merged = { ...(previous ?? {}), ...next };
-  if (
-    Object.prototype.hasOwnProperty.call(next, 'serviceTier') &&
-    next.serviceTier === undefined
-  ) {
-    delete merged.serviceTier;
+  // An own `undefined` is an explicit clear (a model change dropping a tier or
+  // effort the next model does not offer); an absent key keeps the old value.
+  for (const key of ['reasoning', 'serviceTier'] as const) {
+    if (Object.prototype.hasOwnProperty.call(next, key) && next[key] === undefined) {
+      delete merged[key];
+    }
   }
   return merged;
 }

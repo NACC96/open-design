@@ -9,8 +9,10 @@ import { modelProviderIconSrc } from './modelProviderIcon';
 import { RemixIcon } from './RemixIcon';
 import {
   agentModelIsSelectable,
+  agentReasoningOptions,
   defaultAgentModelId,
   effectiveAgentModelChoice,
+  reasoningPatchForModelChange,
 } from './agentModelSelection';
 import {
   modelVersionLabel,
@@ -414,9 +416,7 @@ export function AvatarMenu({
   const normalizedCurrentChoice = effectiveAgentModelChoice(currentAgent, currentChoice) ?? currentChoice;
   const currentModelId =
     normalizedCurrentChoice.model ?? defaultAgentModelId(currentAgent);
-  const activeReasoningOptions =
-    currentAgent?.models?.find((model) => model.id === currentModelId)?.reasoningOptions ??
-    currentAgent?.reasoningOptions;
+  const activeReasoningOptions = agentReasoningOptions(currentAgent, currentModelId);
   const currentReasoningId =
     activeReasoningOptions?.some(
       (option) => option.id === normalizedCurrentChoice.reasoning,
@@ -648,6 +648,11 @@ export function AvatarMenu({
                                 onAgentModelChange(currentAgent.id, {
                                   model: model.id,
                                   serviceTier: undefined,
+                                  ...reasoningPatchForModelChange(
+                                    currentAgent,
+                                    model.id,
+                                    currentChoice.reasoning,
+                                  ),
                                 });
                                 // Selection made — dismiss the popover right away.
                                 setOpen(false);

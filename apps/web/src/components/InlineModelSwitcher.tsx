@@ -19,7 +19,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type { AmrWalletSnapshot } from '@open-design/contracts';
-import { VisuallyHidden } from '@open-design/components';
+import { Select, VisuallyHidden } from '@open-design/components';
 import { useT } from '../i18n';
 import {
   agentIdToTracking,
@@ -70,6 +70,7 @@ import { AgentIcon } from './AgentIcon';
 import { Icon } from './Icon';
 import { modelProviderIconSrc } from './modelProviderIcon';
 import { PlanBadge } from './PlanBadge';
+import styles from './InlineModelSwitcher.module.css';
 import {
   AMR_LOGIN_STATUS_EVENT,
   AMR_LOGIN_POLL_INTERVAL_MS,
@@ -83,9 +84,11 @@ import { orderAgentsWithOpenDesignFirst } from './agentOrdering';
 import { anchorSelectionInView } from './pickerSelectionAnchor';
 import {
   agentModelIsSelectable,
+  agentReasoningOptions,
   defaultAgentModelId,
   effectiveAgentModelChoice,
   normalizeAgentModelChoice,
+  reasoningPatchForModelChange,
 } from './agentModelSelection';
 import {
   modelVersionLabel,
@@ -714,7 +717,7 @@ export function InlineModelSwitcher({
       : configuredModelId ?? defaultAgentModelId(currentAgent);
   const currentModelOption =
     currentAgentModels.find((m) => m.id === currentModelId) ?? null;
-  const currentReasoningOptions = currentModelOption?.reasoningOptions ?? currentAgent?.reasoningOptions;
+  const currentReasoningOptions = agentReasoningOptions(currentAgent, currentModelId);
   const currentReasoningId = currentReasoningOptions?.some(
     (option) => option.id === effectiveCurrentChoice.reasoning,
   )
@@ -767,6 +770,7 @@ export function InlineModelSwitcher({
    * the pick was refused, which is the signal a row should not close the panel
    * or report a selection that did not happen.
    */
+  const savedReasoning = currentChoice.reasoning;
   const applyAgentModel = useCallback(
     (modelId: string, extra?: { serviceTier?: string }) => {
       const agentId = currentAgent?.id;
@@ -774,10 +778,17 @@ export function InlineModelSwitcher({
       if (!agentModelIsSelectable(currentAgent, modelId)) {
         return false;
       }
-      onAgentModelChange?.(agentId, { model: modelId, ...extra });
+      // A saved effort the next model does not offer is cleared here, in the
+      // one sink both model lists share, so the stored choice cannot drift
+      // from the effort the select shows.
+      onAgentModelChange?.(agentId, {
+        model: modelId,
+        ...extra,
+        ...reasoningPatchForModelChange(currentAgent, modelId, savedReasoning),
+      });
       return true;
     },
-    [currentAgent, onAgentModelChange],
+    [currentAgent, onAgentModelChange, savedReasoning],
   );
 
   /**
@@ -1777,21 +1788,38 @@ export function InlineModelSwitcher({
             </>
           )}
 
+          {/* Shown for every Local CLI agent whose selected model (or the agent
+              itself) publishes effort options — Claude, Codex, OpenCode, Pi,
+              … — with the same labels Settings and the avatar menu render. */}
           {config.mode === 'daemon' && currentAgent && currentReasoningOptions && currentReasoningOptions.length > 0 ? (
             <label className="inline-switcher__row">
               <span className="inline-switcher__label">{t('settings.reasoningPicker')}</span>
-              <select
-                className="inline-switcher__select"
+              <Select
+                className={styles.reasoningSelect}
                 data-testid="inline-model-switcher-reasoning"
                 value={currentReasoningId}
-                onChange={(event) => onAgentModelChange(currentAgent.id, { reasoning: event.target.value })}
+                onChange={(event) => {
+                  const reasoning = event.target.value;
+                  onAgentModelChange(currentAgent.id, { reasoning });
+                  trackExecutionSettingsPopoverClick(analytics.track, {
+                    page_name: 'home',
+                    area: 'execution_settings_popover',
+                    element: 'reasoning_dropdown',
+                    execution_mode: 'local_cli',
+                    cli_provider_id: agentIdToTracking(currentAgent.id),
+                    ...(currentModelId
+                      ? { model_id: modelIdForTracking(currentModelId) }
+                      : {}),
+                    reasoning_effort: reasoning,
+                  });
+                }}
               >
                 {currentReasoningOptions.map((option) => (
                   <option key={option.id} value={option.id}>
-                    {option.id === 'default' ? t('settings.modelUsesCliDefault') : option.label}
+                    {option.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
           ) : null}
 

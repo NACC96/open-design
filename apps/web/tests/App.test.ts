@@ -263,6 +263,20 @@ describe('mergeAgentModelChoice', () => {
     });
     expect(Object.prototype.hasOwnProperty.call(merged, 'serviceTier')).toBe(false);
   });
+
+  it('removes reasoning only when the update explicitly clears it', () => {
+    const previous = { model: 'claude-opus-4-8', reasoning: 'xhigh' };
+    expect(mergeAgentModelChoice(previous, { model: 'claude-opus-4-7' })).toEqual({
+      model: 'claude-opus-4-7',
+      reasoning: 'xhigh',
+    });
+    const cleared = mergeAgentModelChoice(previous, {
+      model: 'claude-opus-4-6',
+      reasoning: undefined,
+    });
+    expect(cleared).toEqual({ model: 'claude-opus-4-6' });
+    expect(Object.prototype.hasOwnProperty.call(cleared, 'reasoning')).toBe(false);
+  });
 });
 
 describe('persistComposioConfigChange', () => {

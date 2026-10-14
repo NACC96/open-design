@@ -268,6 +268,79 @@ describe('InlineModelSwitcher AMR row', () => {
     expect(screen.queryByRole('combobox', { name: 'Reasoning effort' })).toBeNull();
   });
 
+  it('offers effort to a non-Claude agent with its own labels and tracks the change', () => {
+    analyticsMocks.track.mockClear();
+    const codex: AgentInfo = {
+      ...codexAgent,
+      models: [{ id: 'default', label: 'Default' }, { id: 'gpt-5.5', label: 'gpt-5.5' }],
+      reasoningOptions: [
+        { id: 'default', label: 'Default' },
+        { id: 'low', label: 'Low' },
+        { id: 'high', label: 'High' },
+      ],
+    };
+    const view = renderSwitcher({
+      agentId: 'codex',
+      agentModels: { codex: { model: 'gpt-5.5' } },
+    }, [codex], {}, { compact: true });
+    fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
+    const picker = screen.getByRole('combobox', { name: 'Reasoning effort' }) as HTMLSelectElement;
+    // The agent's own option labels, exactly as Settings and the avatar menu
+    // render them — not the model picker's "CLI default" wording.
+    expect(Array.from(picker.options).map((option) => option.textContent)).toEqual([
+      'Default', 'Low', 'High',
+    ]);
+    expect(picker.value).toBe('default');
+
+    fireEvent.change(picker, { target: { value: 'high' } });
+
+    expect(view.onAgentModelChange).toHaveBeenLastCalledWith('codex', { reasoning: 'high' });
+    const [eventName, props] = analyticsMocks.track.mock.calls.at(-1)!;
+    expect(eventName).toBe('ui_click');
+    expect(props).toMatchObject({
+      page_name: 'home',
+      area: 'execution_settings_popover',
+      element: 'reasoning_dropdown',
+      execution_mode: 'local_cli',
+      cli_provider_id: 'codex_cli',
+      model_id: 'gpt-5.5',
+      reasoning_effort: 'high',
+    });
+  });
+
+  it('clears a saved effort the next model does not offer when the model changes', () => {
+    const effort = (ids: string[]) => ids.map((id) => ({ id, label: id }));
+    const claude: AgentInfo = {
+      id: 'claude', name: 'Claude Code', bin: 'claude', available: true,
+      models: [
+        { id: 'claude-opus-4-8', label: 'Opus 4.8', reasoningOptions: effort(['default', 'high', 'xhigh']) },
+        { id: 'claude-opus-4-7', label: 'Opus 4.7', reasoningOptions: effort(['default', 'high', 'xhigh']) },
+        { id: 'claude-opus-4-6', label: 'Opus 4.6', reasoningOptions: effort(['default', 'high']) },
+      ],
+    };
+    const view = renderSwitcher({
+      agentId: 'claude',
+      agentModels: { claude: { model: 'claude-opus-4-8', reasoning: 'xhigh' } },
+    }, [claude], {}, { compact: true });
+
+    fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
+    fireEvent.click(screen.getByTestId('inline-model-switcher-compact-model-claude-opus-4-6'));
+
+    const cleared = view.onAgentModelChange.mock.calls.at(-1)!;
+    expect(cleared[0]).toBe('claude');
+    expect(cleared[1]).toEqual({ model: 'claude-opus-4-6', reasoning: undefined });
+    // The own `undefined` key is what tells `mergeAgentModelChoice` to delete
+    // the saved level instead of keeping it.
+    expect(Object.prototype.hasOwnProperty.call(cleared[1], 'reasoning')).toBe(true);
+
+    // A model that still lists the saved level keeps it.
+    fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
+    fireEvent.click(screen.getByTestId('inline-model-switcher-compact-model-claude-opus-4-7'));
+    const kept = view.onAgentModelChange.mock.calls.at(-1)!;
+    expect(kept[1]).toEqual({ model: 'claude-opus-4-7' });
+    expect(Object.prototype.hasOwnProperty.call(kept[1], 'reasoning')).toBe(false);
+  });
+
   it('keeps the AMR reminder inside the picker without marking the chip', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = input.toString();
