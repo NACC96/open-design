@@ -66,10 +66,12 @@ test('antigravity preserves a final-only response and reports native failures', 
   assert.deepEqual(events.filter((event) => event.type === 'text_delta'), [{ type: 'text_delta', delta: 'Finished.' }]);
 });
 
-test('antigravity handles completed-only tools and deduplicates repeated completion snapshots', () => {
+test('antigravity handles terminal-only tools and deduplicates repeated terminal snapshots', () => {
   const { events, handler } = collectEvents('antigravity');
-  const step = { conversation_id: 'agy-2', step_index: 5, step_type: 'tool', state: 'DONE',
-    tool_info: { name: 'write_to_file', parameters: { TargetFile: 'draft.html' }, error: { type: 'FAILED', message: 'write denied' } },
+  // Real agy ends a failed or denied tool with `state: "ERROR"` and the reason
+  // in `tool_info.error` — never `DONE` plus an error.
+  const step = { conversation_id: 'agy-2', step_index: 5, step_type: 'tool', state: 'ERROR',
+    tool_info: { name: 'write_to_file', parameters: { TargetFile: 'draft.html' }, error: { type: 'TOOL_ERROR', message: 'write denied' } },
   };
   handler.feed(`${JSON.stringify({ event: 'step_update', step_update: step })}\n`.repeat(2));
   handler.flush();
