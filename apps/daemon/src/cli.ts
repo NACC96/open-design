@@ -6955,6 +6955,29 @@ async function readRunMessageFromFlags(flags, fallback = null) {
   return fallback;
 }
 
+/**
+ * `od run start|redesign --reasoning <level>` must not be dropped silently.
+ * The run-create response reports how the daemon resolved the level
+ * (`reasoning: { requested, applied, options }`); when it was not applied,
+ * say so on stderr so `--json` stdout stays machine-readable. A daemon that
+ * predates the field reports nothing, and nothing is claimed.
+ */
+function warnIfRequestedReasoningNotApplied(requested, data) {
+  if (typeof requested !== 'string' || !requested) return;
+  const resolution = data?.reasoning;
+  if (!resolution || typeof resolution !== 'object') return;
+  if (resolution.applied === requested) return;
+  const options = Array.isArray(resolution.options)
+    ? resolution.options.filter((id) => typeof id === 'string' && id.length > 0)
+    : [];
+  const hint = options.length > 0
+    ? ` Levels accepted by this agent and model: ${options.join(', ')}.`
+    : ' This agent and model accept no reasoning level.';
+  console.error(
+    `[run] warning: --reasoning ${requested} was not applied; the run uses the agent's default reasoning.${hint}`,
+  );
+}
+
 async function postJsonToDaemon(base, route, body, headers = {}) {
   let resp;
   try {
@@ -8051,6 +8074,7 @@ Common options:
         ...(flags.reasoning ? { reasoning: flags.reasoning } : {}),
       };
       const data = await postJsonToDaemon(base, '/api/runs', body, workspaceHeaders);
+      warnIfRequestedReasoningNotApplied(flags.reasoning, data);
       if (flags.json && !flags.follow) {
         return process.stdout.write(JSON.stringify({
           ...data,
@@ -8121,6 +8145,7 @@ Common options:
         console.error(`POST /api/runs failed: ${resp.status} ${JSON.stringify(data)}`);
         process.exit(1);
       }
+      warnIfRequestedReasoningNotApplied(flags.reasoning, data);
       if (flags.json && !flags.follow) {
         return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
       }
