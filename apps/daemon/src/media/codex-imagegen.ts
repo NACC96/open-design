@@ -97,7 +97,9 @@ async function resolveCodexLaunch(dataDir: string | undefined): Promise<CodexLau
     }),
     launch ?? { childPathPrepend: [] },
   );
-  for (const key of API_KEY_ENV_VARS) delete env[key];
+  for (const key of Object.keys(env)) {
+    if (API_KEY_ENV_VARS.some((excluded) => excluded === key.toUpperCase())) delete env[key];
+  }
   env.CODEX_HOME = codexHomeFromEnv(env);
   if (dataDir) env.OD_DATA_DIR = dataDir;
   return { command: launch?.launchPath ?? null, env };

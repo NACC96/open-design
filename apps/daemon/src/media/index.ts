@@ -1755,9 +1755,15 @@ async function renderNanoBananaImage(ctx: MediaContext, credentials: ProviderCon
   const wireModel = (credentials.model || ctx.wireModel || NANOBANANA_DEFAULT_MODEL).trim();
   const body = {
     contents: [{
-      parts: [{
-        text: ctx.prompt || 'A high-quality reference image.',
-      }],
+      parts: [
+        { text: ctx.prompt || 'A high-quality reference image.' },
+        ...ctx.imageRefs.map((reference) => ({
+          inlineData: {
+            mimeType: reference.mime,
+            data: reference.dataUrl.slice(reference.dataUrl.indexOf(',') + 1),
+          },
+        })),
+      ],
     }],
     generationConfig: {
       responseModalities: ['IMAGE'],

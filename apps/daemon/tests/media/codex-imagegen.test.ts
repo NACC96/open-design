@@ -21,6 +21,8 @@ const ENV_KEYS = [
   'CODEX_HOME',
   'CODEX_API_KEY',
   'OPENAI_API_KEY',
+  'OpenAI_Api_Key',
+  'codex_api_key',
   'OD_DATA_DIR',
   'OD_MEDIA_CONFIG_DIR',
   'OD_MEDIA_ALLOW_STUBS',
@@ -165,6 +167,7 @@ process.stdin.on('end', async () => {
     env: {
       CODEX_API_KEY: process.env.CODEX_API_KEY ?? null,
       OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? null,
+      apiKeyNames: Object.keys(process.env).filter(key => /^(OPENAI|CODEX)_API_KEY$/i.test(key)).join(','),
       CODEX_HOME: process.env.CODEX_HOME ?? null,
     },
   }) + '\\n');
@@ -484,6 +487,20 @@ describe('Codex Subscription image provider', () => {
     expect(call!.env.CODEX_API_KEY).toBeNull();
     expect(call!.env.OPENAI_API_KEY).toBeNull();
   });
+
+  it.each(['OpenAI_Api_Key', 'codex_api_key'])(
+    'excludes inherited API credentials with spelling %s', async (key) => {
+      await writeCodexAuth(codexHome, { auth_mode: 'chatgpt' });
+      const fake = await installFakeCodex(root);
+      process.env.CODEX_BIN = fake.bin;
+      process.env[key] = 'fixture-api-key-exclusion';
+
+      await generate();
+
+      const [call] = await fake.calls();
+      expect(call!.env.apiKeyNames).toBe('');
+    },
+  );
 
   it('attaches project reference images with --image', async () => {
     await writeCodexAuth(codexHome, { auth_mode: 'chatgpt' });
