@@ -1,3 +1,5 @@
+import { RETIRED_AGENT_IDS } from './local-ai-policy.js';
+export { RETIRED_AGENT_IDS } from './local-ai-policy.js';
 import { claudeAgentDef } from './defs/claude.js';
 import { codexAgentDef } from './defs/codex.js';
 import { devinAgentDef } from './defs/devin.js';
@@ -39,11 +41,10 @@ import type { RuntimeAgentDef } from './types.js';
  * and the hidden API-key runtime (`byok-opencode`) are deliberately NOT
  * shipped. Their definitions stay under `./defs/` so upstream syncs merge
  * cleanly, but nothing registers them: `/api/agents` never lists them, the
- * detection pass never probes `vela`, and a run or saved config that still
+ * detection pass never probes `vela`, and an explicit run request that still
  * names either id resolves to "unknown agent" instead of spawning it.
+ * Persisted app defaults are normalized by the pure local AI policy.
  */
-export const RETIRED_AGENT_IDS: ReadonlySet<string> = new Set(['amr', 'byok-opencode']);
-
 export const SHIPPED_AGENT_DEFS: RuntimeAgentDef[] = [
   claudeAgentDef,
   codexAgentDef,

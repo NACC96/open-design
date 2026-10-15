@@ -1,5 +1,5 @@
 import type { AppConfigPrefs } from '@open-design/contracts';
-import { RETIRED_AGENT_IDS } from '../runtimes/registry.js';
+import { RETIRED_AGENT_IDS } from '../runtimes/local-ai-policy.js';
 import type { Routine } from '../routines.js';
 import type { DetectedAgent } from '../runtimes/types.js';
 

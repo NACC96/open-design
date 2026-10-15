@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -86,5 +86,35 @@ describe('Run now for stored retired-runtime automations', () => {
     } });
     const history = await fetch(`${started.url}/api/routines/${routine.id}/runs`);
     expect(await history.json()).toMatchObject({ runs: [expect.objectContaining({ agentRunId: fired.agentRunId })] });
+  });
+});
+
+describe('headless Orbit before web config migration', () => {
+  it.each(['amr', 'byok-opencode'])('uses an available local runtime for persisted %s', async (agentId) => {
+    scratch = await mkdtemp(path.join(os.tmpdir(), 'od-local-orbit-'));
+    const recording = path.join(scratch, 'events.jsonl');
+    await writeFile(recording, JSON.stringify({ id: 1, timestamp: 0, event: 'end', data: { status: 'succeeded', code: 0 } }) + '\n');
+    vi.stubEnv('OD_REPLAY_EVENTS', recording);
+    vi.stubEnv('OD_REPLAY_DIR', '');
+    const configPath = path.join(process.env.OD_DATA_DIR!, 'app-config.json');
+    // Seed the old file directly: no browser load or new-version config writer.
+    const saved = JSON.stringify({
+      agentId, telemetry: { metrics: false, content: false },
+      agentModels: {
+        [agentId]: { model: 'cloud-only', reasoning: 'cloud-only', serviceTier: 'cloud-only' },
+        claude: { model: 'claude-fable-5', reasoning: 'high' },
+      },
+      orbit: { enabled: false, intervalMinutes: 60, maxTokens: 4096, templateSkillId: null },
+    });
+    await writeFile(configPath, saved);
+    started = await startServer({ port: 0, returnServer: true }) as NonNullable<typeof started>;
+    const result = await fetch(`${started.url}/api/orbit/run`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(result.status).toBe(200);
+    expect(dispatched).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'claude', model: 'claude-fable-5', reasoning: 'high', serviceTier: null,
+    }));
+    expect(await readFile(configPath, 'utf8')).toBe(saved);
   });
 });

@@ -13,7 +13,7 @@ import {
   it,
 } from 'vitest';
 
-import { agentCliEnvForAgent, readAppConfig, writeAppConfig } from '../src/app-config.js';
+import { agentCliEnvForAgent, readAppConfig, readAppConfigSync, writeAppConfig } from '../src/app-config.js';
 import { readOdNextRolloutPolicy } from '../src/strategies/od-next/rollout.js';
 import { isLocalSameOrigin } from '../src/origin-validation.js';
 
@@ -40,6 +40,30 @@ describe('app-config', () => {
   });
 
   describe('readAppConfig', () => {
+    it.each(['amr', 'byok-opencode'])('normalizes persisted %s before any web migration without rewriting storage', async (agentId) => {
+      const file = path.join(dataDir, 'app-config.json');
+      const saved = JSON.stringify({
+        agentId, onboardingCompleted: false, customInstructions: 'keep this',
+        agentModels: { [agentId]: { model: 'old-cloud-model' }, codex: { model: 'gpt-5.5', reasoning: 'low', serviceTier: 'fast' } },
+        agentCliEnv: { amr: { VELA_BIN: '/retained-vela' }, codex: { CODEX_HOME: '/configured-codex' } },
+      });
+      await writeFile(file, saved);
+      for (const config of [await readAppConfig(dataDir), readAppConfigSync(dataDir)]) {
+        expect(config).toMatchObject({
+          agentId: null, onboardingCompleted: false, customInstructions: 'keep this',
+          agentModels: { [agentId]: { model: 'old-cloud-model' }, codex: { model: 'gpt-5.5', reasoning: 'low', serviceTier: 'fast' } },
+          agentCliEnv: { amr: { VELA_BIN: '/retained-vela' }, codex: { CODEX_HOME: '/configured-codex' } },
+        });
+      }
+      expect(await readFile(file, 'utf8')).toBe(saved);
+    });
+
+    it.each(['claude', 'codex', 'opencode', 'my-local-profile'])('preserves the persisted local selection %s', async (agentId) => {
+      await writeFile(path.join(dataDir, 'app-config.json'), JSON.stringify({ agentId }));
+      expect((await readAppConfig(dataDir)).agentId).toBe(agentId);
+      expect(readAppConfigSync(dataDir).agentId).toBe(agentId);
+    });
+
     it('returns default telemetry when config file does not exist', async () => {
       expect(await readAppConfig(dataDir)).toEqual({
         telemetry: DEFAULT_TELEMETRY,

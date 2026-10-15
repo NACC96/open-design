@@ -57,6 +57,24 @@ function context(overrides: Record<string, unknown> = {}) {
 }
 
 describe('createAuthorizeProjectRequest', () => {
+  it.each(['rename', 'delete', 'duplicate', 'writeFiles'] as const)(
+    'preserves headerless personal %s while keeping Team recovery fail-closed', async (capability) => {
+      const unavailable = vi.fn(async () => ({ ok: false as const, status: 401 as const, code: 'AMR_AUTH_REQUIRED', message: 'expired' }));
+      for (const visibility of ['personal', 'team'] as const) {
+        const row = { workspaceId: 'workspace-a', visibility, resourceState: 'active', createdByWorkspaceMemberId: 'owner-a' };
+        const sendApiError = vi.fn();
+        const authorize = createAuthorizeProjectRequest({
+          db: {}, getWorkspaceProject: () => row, getWorkspaceProjectByProjectId: () => row,
+          verifyWorkspaceRequestAuthority: unavailable, sendApiError,
+        });
+        expect(await authorize(request({}), response(), 'owned-project', { mode: 'write', capability })).toBe(visibility === 'personal');
+        if (visibility === 'team') expect(sendApiError).toHaveBeenCalledWith(expect.anything(), 400, 'WORKSPACE_CONTEXT_REQUIRED', expect.any(String));
+        else expect(sendApiError).not.toHaveBeenCalled();
+      }
+      expect(unavailable).not.toHaveBeenCalled();
+    },
+  );
+
   it('keeps a first-open placeholder readable/commentable but blocks content writes', async () => {
     const row = {
       workspaceId: 'workspace-a',
