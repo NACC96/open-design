@@ -37,6 +37,7 @@ type FakeCodexOptions = {
   credentials?: { file?: string; keyring?: string; secrets?: string };
   configReadError?: boolean;
   changeStoreAfterRead?: string;
+  authRouting?: Record<string, unknown>;
 };
 
 /**
@@ -59,6 +60,7 @@ async function installFakeCodex(root: string, options: FakeCodexOptions = {}): P
     credentials: options.credentials,
     configReadError: options.configReadError,
     changeStoreAfterRead: options.changeStoreAfterRead,
+    authRouting: options.authRouting,
     png: PNG_BASE64,
     outputFileName: options.outputFileName === undefined
       ? 'exec-0d4c4e7e-6a0e-4bb4-9a37-1b2f3c4d5e6f.png'
@@ -107,7 +109,7 @@ if (args[0] === 'app-server') {
     if (request.method === 'config/read') {
       const response = config.configReadError
         ? {error: {code: -32603, message: 'fake config failure'}}
-        : {result: {config: {cli_auth_credentials_store: configuredStore ?? null, features: configuredSecrets ? {secret_auth_storage: configuredSecrets === 'true'} : {}, unrelated_secret: 'MUST_NOT_COPY_CONFIG'}, origins: {}}};
+        : {result: {config: {...config.authRouting, cli_auth_credentials_store: configuredStore ?? null, features: {...config.authRouting?.features, ...(configuredSecrets ? {secret_auth_storage: configuredSecrets === 'true'} : {})}, unrelated_secret: 'MUST_NOT_COPY_CONFIG'}, origins: {}}};
       process.stdout.write(JSON.stringify({id: request.id, ...response}) + '\\n');
       if (config.changeStoreAfterRead) {
         writeFileSync(configFile, 'cli_auth_credentials_store = "' + config.changeStoreAfterRead + '"\\n');
@@ -391,6 +393,48 @@ describe('Codex Subscription image provider', () => {
     await expect(generate()).rejects.toThrow(/credential store/);
     expect(await fake.calls()).toHaveLength(0);
     expect((await fake.invocations()).some(call => call.args[0] === 'login')).toBe(false);
+  });
+
+  it('preserves only supported auth routing for login and generation, and redacts command evidence', async () => {
+    const fake = await installFakeCodex(root, { authRouting: {
+      chatgpt_base_url: 'https://chat.example.test/private-routing/backend-api/',
+      forced_chatgpt_workspace_id: ['workspace-one', 'workspace-two'],
+      features: { respect_system_proxy: true, system_proxy_fallback: false, psp: true, shell_tool: true },
+      model_provider: 'MUST_NOT_COPY_CONFIG',
+    } });
+    process.env.CODEX_BIN = fake.bin;
+    await generate();
+    const authCalls = (await fake.invocations()).filter(call => ['login', 'exec'].includes(call.args[0]!));
+    for (const call of authCalls) {
+      expect(call.args).toContain('chatgpt_base_url="https://chat.example.test/private-routing/backend-api/"');
+      expect(call.args).toContain('forced_chatgpt_workspace_id=["workspace-one","workspace-two"]');
+      expect(call.args).toContain('features.respect_system_proxy=true');
+      expect(call.args).toContain('features.system_proxy_fallback=false');
+      expect(call.args).toContain('features.psp=true');
+      expect(call.args).toContain('forced_login_method="chatgpt"');
+      expect(call.args.join(' ')).not.toContain('MUST_NOT_COPY_CONFIG');
+      expect(call.args).not.toContain('features.shell_tool=true');
+    }
+    const runsDir = path.join(root, 'data-root', 'media', 'codex-runs');
+    const [run] = await readdir(runsDir);
+    const metadata = await readFile(path.join(runsDir, run!, 'metadata.json'), 'utf8');
+    expect(metadata).not.toContain('private-routing');
+    expect(metadata).not.toContain('workspace-one');
+    expect(metadata).toContain('chatgpt_base_url');
+  });
+
+  it.each([
+    { chatgpt_base_url: 'https://user:secret@example.test/backend-api' },
+    { chatgpt_base_url: 'https://example.test/?token=secret' },
+    { chatgpt_base_url: 'https://example.test/#secret' },
+    { chatgpt_base_url: 'file:///private/backend-api' },
+    { forced_chatgpt_workspace_id: 12 },
+    { features: { respect_system_proxy: 'yes' } },
+  ])('refuses malformed or credential-bearing auth routing before login or rendering: %j', async authRouting => {
+    const fake = await installFakeCodex(root, { authRouting });
+    process.env.CODEX_BIN = fake.bin;
+    await expect(generate()).rejects.toThrow(/Codex/);
+    expect((await fake.invocations()).map(call => call.args[0])).toEqual(['app-server']);
   });
 
   it('refuses to run when Codex is signed out, naming the fix', async () => {

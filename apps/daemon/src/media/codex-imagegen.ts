@@ -21,7 +21,7 @@ import {
 } from '../agents.js';
 import { agentCliEnvForAgent, readAppConfig } from '../app-config.js';
 import { isSandboxModeEnabled } from '../sandbox-mode.js';
-import { readCodexAuthConfig, codexAuthConfigArgs, type CodexAuthConfig } from './codex-auth-config.js';
+import { readCodexAuthConfig, codexAuthConfigArgs, redactCodexAuthArgs, type CodexAuthConfig } from './codex-auth-config.js';
 import {
   codexHomeFromEnv,
   resolveCodexSubscriptionStatus,
@@ -121,7 +121,7 @@ function runCodex(
   const stderrPath = path.join(options.runDir, 'stderr.txt');
   const metadataPath = path.join(options.runDir, 'metadata.json');
   const metadata = {
-    command: invocation.command, args: invocation.args, cwd: options.cwd,
+    command: invocation.command, args: redactCodexAuthArgs(invocation.args), cwd: options.cwd,
     startedAt: new Date().toISOString(), pid: null as number | null,
     threadId: null as string | null, endedAt: null as string | null,
     exitCode: null as number | null, signal: null as NodeJS.Signals | null,
@@ -287,7 +287,6 @@ export function codexImagegenArgs(input: {
     'read-only',
     '-C',
     input.workDir,
-    '-c', 'forced_login_method="chatgpt"',
     ...codexAuthConfigArgs(input.authConfig ?? { credentialStore: 'file' }),
     '--disable', 'hooks',
     '--disable', 'plugins',

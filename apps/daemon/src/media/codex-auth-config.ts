@@ -7,6 +7,11 @@ export interface CodexAuthConfig {
   credentialStore: CodexCredentialStore;
   /** Selects direct OS-keyring versus encrypted local secrets storage. */
   secretAuthStorage?: boolean;
+  chatgptBaseUrl?: string;
+  forcedChatgptWorkspaceId?: string | string[];
+  respectSystemProxy?: boolean;
+  systemProxyFallback?: boolean;
+  psp?: boolean;
 }
 
 const CONFIG_READ_TIMEOUT_MS = 15_000;
@@ -29,21 +34,68 @@ function authConfigFromResult(result: unknown): CodexAuthConfig {
   if (secretAuthStorage != null && typeof secretAuthStorage !== 'boolean') {
     throw new Error('Codex returned an unsupported keyring backend');
   }
+  const chatgptBaseUrl = config.chatgpt_base_url;
+  if (chatgptBaseUrl != null) {
+    if (typeof chatgptBaseUrl !== 'string') throw new Error('Invalid ChatGPT route');
+    const url = new URL(chatgptBaseUrl);
+    // This adapter forwards routing, never credentials embedded in a URL.
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new Error('ChatGPT route must be an HTTP(S) URL without credentials, query, or fragment');
+    }
+  }
+  const workspace = config.forced_chatgpt_workspace_id;
+  const safeWorkspace = (value: unknown): value is string => typeof value === 'string' && !/[\x00-\x1f]/.test(value);
+  if (workspace != null && !safeWorkspace(workspace)
+    && !(Array.isArray(workspace) && workspace.every(safeWorkspace))) {
+    throw new Error('Invalid ChatGPT workspace restriction');
+  }
+  // These are the effective HTTP routing features used by Config::auth_route_config
+  // in Codex 0.162.1. Other feature flags and arbitrary config stay isolated.
+  const routingFeatures: Pick<CodexAuthConfig, 'respectSystemProxy' | 'systemProxyFallback' | 'psp'> = {};
+  for (const [key, target] of [
+    ['respect_system_proxy', 'respectSystemProxy'],
+    ['system_proxy_fallback', 'systemProxyFallback'],
+    ['psp', 'psp'],
+  ] as const) {
+    const flag = features != null && typeof features === 'object'
+      ? (features as Record<string, unknown>)[key] : undefined;
+    if (flag != null && typeof flag !== 'boolean') throw new Error('Invalid auth routing feature');
+    if (typeof flag === 'boolean') routingFeatures[target] = flag;
+  }
   return {
     credentialStore: value,
     ...(typeof secretAuthStorage === 'boolean' ? { secretAuthStorage } : {}),
+    ...(typeof chatgptBaseUrl === 'string' ? { chatgptBaseUrl } : {}),
+    ...(workspace != null ? { forcedChatgptWorkspaceId: workspace as string | string[] } : {}),
+    ...routingFeatures,
   };
 }
 
 export function codexAuthConfigArgs(config: CodexAuthConfig): string[] {
-  return [
+  const args = [
+    '-c', 'forced_login_method="chatgpt"',
     '-c', `cli_auth_credentials_store="${config.credentialStore}"`,
-    ...(config.secretAuthStorage == null ? [] : ['-c', `features.secret_auth_storage=${config.secretAuthStorage}`]),
   ];
+  for (const [key, value] of [
+    ['features.secret_auth_storage', config.secretAuthStorage],
+    ['chatgpt_base_url', config.chatgptBaseUrl],
+    ['forced_chatgpt_workspace_id', config.forcedChatgptWorkspaceId],
+    ['features.respect_system_proxy', config.respectSystemProxy],
+    ['features.system_proxy_fallback', config.systemProxyFallback],
+    ['features.psp', config.psp],
+  ] as const) {
+    if (value != null) args.push('-c', `${key}=${JSON.stringify(value)}`);
+  }
+  return args;
+}
+
+/** Retain the fact that a route was pinned without persisting private URLs/IDs. */
+export function redactCodexAuthArgs(args: readonly string[]): string[] {
+  return args.map(arg => arg.replace(/^(chatgpt_base_url|forced_chatgpt_workspace_id)=.*$/s, '$1="<redacted>"'));
 }
 
 /**
- * Ask Codex for its non-secret credential-store selection. Its config
+ * Ask Codex for its non-secret credential-store and authentication-route selection. Its config
  * API applies user/system/managed layers without us parsing auth files or
  * copying arbitrary user configuration into the isolated image invocation.
  * This read-only process never starts a thread or an agent turn.
