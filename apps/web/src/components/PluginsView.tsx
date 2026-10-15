@@ -180,7 +180,6 @@ const PLUGINS_TABS: ReadonlyArray<{
   { id: 'installed' },
   { id: 'available' },
   { id: 'sources' },
-  { id: 'team' },
 ];
 
 const PLUGIN_SHARE_DETAILS: Record<PluginShareAction, {
@@ -763,16 +762,6 @@ export function PluginsView({
             t={t}
           />
         ) : null}
-
-        {activeTab === 'team' ? (
-          <TeamPanel
-            t={t}
-            plugins={userPlugins}
-            workspaceContext={pluginsWorkspaceContext}
-            workspaceIdentity={pluginsIdentity}
-            workspaceReadMode={pluginsReadMode}
-          />
-        ) : null}
       </div>
 
       <AnimatePresence>
@@ -1055,15 +1044,8 @@ export function ExtensionsMarketplace({
   const catalogStaleRef = useRef(false);
   const sharedResourcesStaleRef = useRef(false);
   const myMemberId = workspaceContext?.workspaceMemberId ?? null;
-  // The 团队 scope is a team-workspace surface backed by the resource hub: it
-  // lists the resources shared into the team and offers a share-to-team action.
-  // Gate it on TEAM IDENTITY — the same predicate the daemon uses to accept a
-  // hub share (workspaceContextHasTeamIdentity; see team-resource-share.ts) —
-  // NOT on the billing plan. A team on a free/unpaid tier (trial, lapsed, or
-  // billing not yet resolved) still has a real team resource plane with shared
-  // resources; gating on the plan hid the scope from those teams even though the
-  // daemon happily serves and shares their resources. Personal / signed-out
-  // sessions have no team plane and correctly get no team pill.
+  // Ownership reads still use the exact workspace identity even though Team
+  // navigation and resource-sharing actions are not exposed in this fork.
   const hasTeamWorkspace = workspaceContextHasTeamIdentity(workspaceContext);
   const pageViewFiredRef = useRef(false);
   useEffect(() => {
@@ -1116,8 +1098,8 @@ export function ExtensionsMarketplace({
     });
   }
   useEffect(() => {
-    if (scope === 'team' && !hasTeamWorkspace) setScope('official');
-  }, [scope, hasTeamWorkspace]);
+    if (scope === 'team') setScope('official');
+  }, [scope]);
   const [query, setQuery] = useState('');
   // Selected category chip (`null` = 全部). Slugs come from the cards in scope.
   const [category, setCategory] = useState<string | null>(null);
@@ -1843,14 +1825,9 @@ export function ExtensionsMarketplace({
         accent: marketAccent(record.id),
         action: { kind: 'try', record },
         detail: { kind: 'plugin', record },
-        // Keep the share affordance live after the first share (relabeled to
-        // "sync" by `card.isShared`) so an owner can push a local edit to the
-        // team without unsharing and resharing. Restricted to `canUnshare`
-        // once shared — the same "who may manage this" gate `unshare` already
-        // uses — so a plain member who merely has the plugin installed can't
-        // overwrite the real owner's shared copy.
-        share: personal && (!shared || canUnshare) ? { kind: 'plugins', id: record.id } : null,
-        unshare: shared && canUnshare ? { kind: 'plugins', id: record.id } : null,
+        // Local-only presentation: retain ownership reads, omit team mutations.
+        share: null,
+        unshare: null,
         uninstall:
           record.sourceKind === 'bundled' ? null : { kind: 'plugins', id: record.id },
         stats: pluginCardStats(record),
@@ -1872,11 +1849,8 @@ export function ExtensionsMarketplace({
         // the skill at all (issue #131).
         action: { kind: 'use-skill', skill },
         detail: { kind: 'skill', skill },
-        // See the plugin card builder above: keep sharing live post-share
-        // (relabeled "sync") for whoever may manage it, so a skill owner can
-        // push local edits without unshare-then-reshare.
-        share: personal && (!shared || canUnshare) ? { kind: 'skills', id: skill.id } : null,
-        unshare: shared && canUnshare ? { kind: 'skills', id: skill.id } : null,
+        share: null,
+        unshare: null,
         uninstall: skill.source === 'user' ? { kind: 'skills', id: skill.id } : null,
         stats: null,
         category: skillCardCategory(skill),
@@ -2138,7 +2112,7 @@ export function ExtensionsMarketplace({
 
       <div className="plugin-marketplace__filter-block">
         <div className="plugin-marketplace__filters" aria-label={t('pluginsView.marketplaceSourceFiltersAria')}>
-          {MARKET_SCOPES.filter((item) => item.id !== 'team' || hasTeamWorkspace).map((item) => (
+          {MARKET_SCOPES.filter((item) => item.id !== 'team').map((item) => (
             <button
               key={item.id}
               type="button"

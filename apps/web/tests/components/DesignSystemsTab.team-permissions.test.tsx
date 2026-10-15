@@ -120,9 +120,9 @@ function renderTab() {
   );
 }
 
-async function openTeamTabAndSelect() {
-  await waitFor(() => expect(screen.getByRole('tab', { name: /Team/i })).toBeTruthy());
-  fireEvent.click(screen.getByRole('tab', { name: /Team/i }));
+async function openLocalCopy() {
+  await waitFor(() => expect(screen.getByRole('tab', { name: 'Your systems' })).toBeTruthy());
+  fireEvent.click(screen.getByRole('tab', { name: 'Your systems' }));
   await screen.findByTestId('design-kit-view-user:teammate-ds');
 }
 
@@ -130,7 +130,7 @@ describe('DesignSystemsTab team-synced permission gating', () => {
   it('hides edit/publish/delete for a teammate-shared system the caller may not manage', async () => {
     mockTeamFetch(false);
     renderTab();
-    await openTeamTabAndSelect();
+    await openLocalCopy();
 
     // Edit with agent is a real write surface into the authoring flow — fully
     // hidden, not just disabled.
@@ -150,7 +150,7 @@ describe('DesignSystemsTab team-synced permission gating', () => {
   it('keeps edit/publish/delete live for the original sharer or a workspace owner/admin', async () => {
     mockTeamFetch(true);
     renderTab();
-    await openTeamTabAndSelect();
+    await openLocalCopy();
 
     expect(screen.getByRole('button', { name: /Edit with agent/i })).toBeTruthy();
 

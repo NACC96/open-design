@@ -21,6 +21,7 @@ vi.mock('@open-design/platform', async (importOriginal) => ({
 }));
 
 import * as diagnosticEvidence from '../../src/services/diagnostics-evidence.js';
+import { AGENT_DEFS, getAgentDef } from '../../src/runtimes/registry.js';
 import { runVelaCommand } from '../../src/integrations/vela-command.js';
 import {
   runVelaResourceBatchCommand,
@@ -90,6 +91,8 @@ describe('runVelaCommand', () => {
   });
 
   it('uses the configured AMR binary and feature-test login profile', async () => {
+    expect(getAgentDef('amr')).toBeNull();
+    expect(AGENT_DEFS.some((def) => def.id === 'amr')).toBe(false);
     const stdout = await runVelaCommand(['resource', 'head', 'project-1'], {
       env: {
         ...process.env,
