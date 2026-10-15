@@ -553,6 +553,8 @@ export type InternalAction =
   | { type: "assert-worktree-head"; commit: string }
   | { appPath: string; expect: ExpectedApp; type: "verify-app" }
   | { appPath: string; namespaceBaseRoot: string; type: "bake-namespace-base-root" }
+  | { appPath: string; type: 'disable-updates' }
+  | { type: 'assert-launcher-version'; version: string; namespaceBaseRoot: string | null }
   | { dir: string; meta: Omit<KeptCopy, "appPath" | "dir">; type: "write-kept-meta" }
   | { record: InstallRecord; type: "record-state" }
   | { protect: string[]; type: "prune-kept" }
@@ -569,7 +571,7 @@ export type ExpectedApp = {
   namespace: string;
   /** `null` asserts the config bakes no root (portable). */
   namespaceBaseRoot: string | null;
-  updateEnabled: false;
+  updateEnabled: boolean | null;
   version: string;
 };
 
@@ -625,6 +627,7 @@ function installSteps(
   identity: ForkInstanceIdentity,
   sourceAppPath: string,
   hasInstalled: boolean,
+  stagedSteps: readonly PlanStep[] = [],
 ): PlanStep[] {
   const appPath = instanceAppPath(paths, identity);
   const staging = stagingDir(paths, identity);
@@ -633,6 +636,7 @@ function installSteps(
   return [
     run("clear leftover staging", paths.home, ["rm", "-rf", staging, replaced]),
     run("stage the new bundle next to the install location", paths.home, ["ditto", sourceAppPath, stagedApp]),
+    ...stagedSteps,
     ...(hasInstalled
       ? [run("move the installed bundle aside", paths.home, ["mkdir", "-p", replaced]),
         run("move the installed bundle aside", paths.home, ["mv", appPath, path.join(replaced, identity.appBundleName)])]
@@ -807,6 +811,7 @@ export type RollbackPlanInput = {
   quitRunning: boolean;
   running: boolean;
   target: KeptCopy;
+  targetApp: InstalledApp;
   toolsPackAvailable: boolean;
 };
 
@@ -815,15 +820,21 @@ export function buildRollbackPlan(input: RollbackPlanInput): PlanStep[] {
   if (identity.instance !== "stable") throw new Error("rollback only applies to the stable app");
   const appPath = instanceAppPath(paths, identity);
   const installedVersion = input.installed?.version ?? null;
+  const namespaceBaseRoot = input.installed != null
+    ? input.installed.namespaceBaseRoot
+    : input.targetApp.namespaceBaseRoot;
+  const expect = {
+    bundleId: identity.bundleId,
+    namespace: identity.namespace,
+    namespaceBaseRoot,
+    version: target.version,
+  };
   const steps: PlanStep[] = [
     internal("verify the kept copy", {
       appPath: target.appPath,
       expect: {
-        bundleId: identity.bundleId,
-        namespace: identity.namespace,
-        namespaceBaseRoot: input.installed?.namespaceBaseRoot ?? null,
-        updateEnabled: false,
-        version: target.version,
+        ...expect,
+        updateEnabled: input.targetApp.updateEnabled,
       },
       type: "verify-app",
     }),
@@ -840,6 +851,9 @@ export function buildRollbackPlan(input: RollbackPlanInput): PlanStep[] {
     ));
   }
   steps.push(internal(`confirm ${identity.productName} is not running`, { type: "assert-not-running" }));
+  steps.push(internal('refuse rollback if a newer launcher payload would override it', {
+    type: 'assert-launcher-version', version: target.version, namespaceBaseRoot,
+  }));
   if (installedVersion != null) {
     steps.push(...keepSteps(
       paths,
@@ -851,15 +865,23 @@ export function buildRollbackPlan(input: RollbackPlanInput): PlanStep[] {
     ));
   }
   steps.push(
-    ...installSteps(paths, identity, target.appPath, input.installed != null),
+    ...installSteps(paths, identity, target.appPath, input.installed != null,
+      input.targetApp.updateEnabled === false ? [] : [
+        internal('disable updates on the staged restore without changing the kept copy', {
+          type: 'disable-updates', appPath: path.join(stagingDir(paths, identity), identity.appBundleName),
+        }),
+        run('re-seal the staged restore after disabling updates', paths.home, [
+          'codesign', '--force', '--sign', '-', '--timestamp=none', path.join(stagingDir(paths, identity), identity.appBundleName),
+        ]),
+        run('verify the staged restore signature', paths.home, [
+          'codesign', '--verify', '--deep', '--strict', path.join(stagingDir(paths, identity), identity.appBundleName),
+        ]),
+      ]),
     internal("verify the installed bundle", {
       appPath,
       expect: {
-        bundleId: identity.bundleId,
-        namespace: identity.namespace,
-        namespaceBaseRoot: input.installed?.namespaceBaseRoot ?? null,
+        ...expect,
         updateEnabled: false,
-        version: target.version,
       },
       type: "verify-app",
     }),

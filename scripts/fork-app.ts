@@ -11,18 +11,21 @@
 // scripts/lib/fork-app.ts and are covered by e2e/tests/scripts/fork-app.test.ts.
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from "node:fs";
-import { mkdir, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from "node:url";
 
 import {
   assertDevPlanIsolated,
   CHILD_ENV_UNSET,
   computeNextVersion,
+  compareVersions,
   DEFAULT_PROMOTE_REF,
   defaultNamespaceBaseRoot,
   emptyState,
@@ -68,6 +71,8 @@ import type {
 } from "./lib/fork-app.ts";
 
 class ForkAppError extends Error {}
+
+export { readState, writeState, withLock, executePlan, runInternal };
 
 /**
  * The home directory every app, state, and namespace path derives from.
@@ -145,14 +150,16 @@ function probe(argv: string[], cwd = repoRoot, options: { allowFailure?: boolean
   return result.stdout.trim();
 }
 
-async function runCommand(argv: string[], cwd: string, env?: Record<string, string | null>): Promise<void> {
+async function runCommand(argv: string[], cwd: string, env?: Record<string, string | null>, signal?: AbortSignal): Promise<void> {
   echoCommand(argv, cwd, env);
   await new Promise<void>((resolveRun, rejectRun) => {
-    const child = spawn(argv[0]!, argv.slice(1), { cwd, env: childEnv(env), stdio: "inherit" });
-    child.once("error", (error) => rejectRun(new ForkAppError(`${argv[0]} failed to start: ${error.message}`)));
-    child.once("exit", (code, signal) => {
-      if (code === 0) resolveRun();
-      else rejectRun(new ForkAppError(`command failed (${signal ?? `exit ${code}`}): ${formatCommand(argv)}`));
+    const child = spawn(argv[0]!, argv.slice(1), { cwd, env: childEnv(env), stdio: "inherit", signal });
+    let failure: Error | undefined;
+    child.once('error', (error) => { failure = error; });
+    child.once('close', (code, exitSignal) => {
+      if (failure) rejectRun(failure);
+      else if (code === 0) resolveRun();
+      else rejectRun(new ForkAppError(`command failed (${exitSignal ?? `exit ${code}`}): ${formatCommand(argv)}`));
     });
   });
 }
@@ -208,8 +215,8 @@ function assertOwnedApp(identity: ForkInstanceIdentity, appPath: string, install
   }
 }
 
-async function readLauncherVersions(identity: ForkInstanceIdentity, installed: InstalledApp | null): Promise<string[]> {
-  const runtimePath = launcherRuntimePath(forkHome(), identity, installed?.namespaceBaseRoot ?? null);
+async function readLauncherVersions(identity: ForkInstanceIdentity, installed: Pick<InstalledApp, 'namespaceBaseRoot'> | null, home = forkHome()): Promise<string[]> {
+  const runtimePath = launcherRuntimePath(home, identity, installed?.namespaceBaseRoot ?? null);
   if (!existsSync(runtimePath)) return [];
   const runtime = await readJson(runtimePath) as Record<string, { version?: unknown } | undefined>;
   return [runtime.active?.version, runtime.lastSuccessful?.version].filter((value): value is string => typeof value === "string");
@@ -226,13 +233,43 @@ function liveProcesses(processes: readonly InstanceProcess[]): InstanceProcess[]
 }
 
 async function readState(paths: ForkAppsPaths): Promise<ForkAppsState> {
-  return existsSync(paths.statePath) ? normalizeState(await readJson(paths.statePath)) : emptyState();
+  try {
+    return existsSync(paths.statePath) ? normalizeState(await readJson(paths.statePath)) : emptyState();
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    const backup = `${paths.statePath}.backup`;
+    if (existsSync(backup)) {
+      const restored = normalizeState(await readJson(backup));
+      process.stderr.write(`fork-app: recovering install history from ${backup}; current state JSON is incomplete\n`);
+      return restored;
+    }
+    throw new ForkAppError(`invalid JSON in ${paths.statePath}; inspect it and restore a valid state backup before continuing`);
+  }
+}
+
+async function writeAtomicJson(file: string, text: string): Promise<void> {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, text, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 async function writeState(paths: ForkAppsPaths, state: ForkAppsState): Promise<void> {
   await mkdir(paths.stateDir, { recursive: true });
   process.stderr.write(`$ write ${paths.statePath}\n`);
-  await writeFile(paths.statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  let previous: string | undefined;
+  try {
+    previous = await readFile(paths.statePath, 'utf8');
+    JSON.parse(previous);
+  } catch (error) {
+    if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    previous = undefined;
+  }
+  if (previous !== undefined) await writeAtomicJson(`${paths.statePath}.backup`, previous);
+  await writeAtomicJson(paths.statePath, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 async function listKeptCopies(paths: ForkAppsPaths): Promise<KeptCopy[]> {
@@ -296,25 +333,34 @@ async function fetchOrigin(options: ForkOptions): Promise<void> {
   await runCommand(["git", "fetch", "origin"], repoRoot);
 }
 
-async function withLock<T>(paths: ForkAppsPaths, task: () => Promise<T>): Promise<T> {
+async function withLock<T>(
+  paths: ForkAppsPaths,
+  task: () => Promise<T>,
+  inputs?: { expected: unknown; read: () => Promise<unknown> },
+): Promise<T> {
   await mkdir(paths.stateDir, { recursive: true });
   let handle: FileHandle;
   try {
     handle = await open(paths.lockPath, "wx");
-  } catch {
-    const holder = await readFile(paths.lockPath, "utf8").catch(() => "");
-    const pid = Number(holder.trim());
-    const alive = Number.isInteger(pid) && pid > 0 && spawnSync("kill", ["-0", String(pid)]).status === 0;
-    if (alive) throw new ForkAppError(`another fork-app run (pid ${pid}) holds ${paths.lockPath}`);
-    await rm(paths.lockPath, { force: true });
-    handle = await open(paths.lockPath, "wx");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const holder = (await readFile(paths.lockPath, 'utf8').catch(() => '')).trim();
+    throw new ForkAppError(`another fork-app run holds ${paths.lockPath} (owner ${holder || 'not yet published'}); inspect a stale lock before explicitly removing it`);
   }
-  await handle.writeFile(`${process.pid}\n`);
-  await handle.close();
+  const owner = await handle.stat();
   try {
+    await handle.writeFile(`${process.pid}\n`);
+    if (inputs && JSON.stringify(await inputs.read()) !== JSON.stringify(inputs.expected)) {
+      throw new ForkAppError('plan inputs changed while waiting for confirmation or the lock; re-run to review a fresh plan');
+    }
     return await task();
   } finally {
-    await rm(paths.lockPath, { force: true });
+    await handle.close();
+    const current = await lstat(paths.lockPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (current?.dev === owner.dev && current.ino === owner.ino) await rm(paths.lockPath);
   }
 }
 
@@ -325,6 +371,10 @@ type ExecutionContext = {
   identity: ForkInstanceIdentity;
   paths: ForkAppsPaths;
   previousInviteHandler?: string | null;
+  inviteRestorePending?: boolean;
+  inviteLaunchStarted?: boolean;
+  inviteLaunchStopped?: boolean;
+  signal?: AbortSignal | undefined;
 };
 
 const INVITE_SCHEME = "opendesign";
@@ -346,7 +396,9 @@ async function setInviteHandler(bundleId: string): Promise<void> {
 const INTERNAL_TAGS: Record<InternalAction["type"], string> = {
   "assert-not-running": "check",
   "assert-worktree-head": "check",
+  'assert-launcher-version': 'check',
   "bake-namespace-base-root": "edit config",
+  'disable-updates': 'edit config',
   "prune-kept": "cleanup",
   "record-state": "write state",
   "verify-app": "check",
@@ -388,12 +440,12 @@ async function verifyApp(appPath: string, expect: ExpectedApp): Promise<void> {
   const shortVersion = plistValue(appPath, "CFBundleShortVersionString");
   if (shortVersion !== expect.version) problems.push(`CFBundleShortVersionString ${shortVersion} != ${expect.version}`);
   if (app.namespace !== expect.namespace) problems.push(`namespace ${app.namespace} != ${expect.namespace}`);
-  if (app.updateEnabled !== expect.updateEnabled) problems.push(`updateEnabled ${String(app.updateEnabled)} != false`);
+  if (app.updateEnabled !== expect.updateEnabled) problems.push(`updateEnabled ${String(app.updateEnabled)} != ${String(expect.updateEnabled)}`);
   if (app.namespaceBaseRoot !== expect.namespaceBaseRoot) {
     problems.push(`namespaceBaseRoot ${app.namespaceBaseRoot ?? "(unset)"} != ${expect.namespaceBaseRoot ?? "(unset)"}`);
   }
   if (problems.length > 0) throw new ForkAppError(`${appPath} failed verification:\n  - ${problems.join("\n  - ")}`);
-  say(`      ok: ${expect.bundleId} ${expect.version}, namespace ${expect.namespace}, updateEnabled false`);
+  say(`      ok: ${expect.bundleId} ${expect.version}, namespace ${expect.namespace}, updateEnabled ${String(expect.updateEnabled)}`);
 }
 
 async function waitForExit(context: ExecutionContext, timeoutMs: number): Promise<InstanceProcess[]> {
@@ -401,7 +453,7 @@ async function waitForExit(context: ExecutionContext, timeoutMs: number): Promis
   const deadline = Date.now() + timeoutMs;
   let live = liveProcesses(instanceProcesses(context.identity, appPath));
   while (live.length > 0 && Date.now() < deadline) {
-    await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+    await delay(1000, undefined, { signal: context.signal });
     live = liveProcesses(instanceProcesses(context.identity, appPath, true));
   }
   return live;
@@ -430,6 +482,18 @@ async function runInternal(context: ExecutionContext, action: InternalAction): P
     case "verify-app":
       await verifyApp(action.appPath, action.expect);
       return;
+    case 'assert-launcher-version': {
+      const versions = await readLauncherVersions(identity, { namespaceBaseRoot: action.namespaceBaseRoot }, paths.home);
+      const newer = versions.find(version => compareVersions(version, action.version) > 0);
+      if (newer) throw new ForkAppError(`a newer launcher payload (${newer}) can override rollback ${action.version}; clear the update cache through the app before retrying`);
+      return;
+    }
+    case 'disable-updates': {
+      const configPath = path.join(action.appPath, 'Contents', 'Resources', 'open-design-config.json');
+      const config = await readJson(configPath) as Record<string, unknown>;
+      await writeFile(configPath, `${JSON.stringify({ ...config, updateEnabled: false }, null, 2)}\n`, 'utf8');
+      return;
+    }
     case "bake-namespace-base-root": {
       const configPath = path.join(action.appPath, "Contents", "Resources", "open-design-config.json");
       const config = await readJson(configPath) as Record<string, unknown>;
@@ -459,6 +523,7 @@ async function runInternal(context: ExecutionContext, action: InternalAction): P
     }
     case "remember-invite-handler": {
       context.previousInviteHandler = readInviteHandler();
+      context.inviteRestorePending = context.previousInviteHandler != null && context.previousInviteHandler !== identity.bundleId;
       say(`      opendesign:// -> ${context.previousInviteHandler ?? "(none)"}`);
       return;
     }
@@ -468,24 +533,25 @@ async function runInternal(context: ExecutionContext, action: InternalAction): P
         say(`      ${identity.productName} keeps opendesign:// (it had no other owner)`);
         return;
       }
-      // The app claims the scheme during startup; settle before handing it back.
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        await new Promise((resolveWait) => setTimeout(resolveWait, 2000));
-        await setInviteHandler(previous);
-        await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
-        if (readInviteHandler(true) === previous) {
-          say(`      opendesign:// -> ${previous} again`);
-          return;
+      if (!context.inviteLaunchStopped) {
+        const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
+        while (readInviteHandler(true) !== identity.bundleId) {
+          context.signal?.throwIfAborted();
+          if (Date.now() >= deadline) throw new ForkAppError(`${identity.productName} never completed its invite-scheme claim`);
+          await delay(250, undefined, { signal: context.signal });
         }
       }
-      say(`      warning: opendesign:// still points at ${readInviteHandler(true) ?? "(none)"}; relaunch the app that should own it`);
+      await setInviteHandler(previous);
+      if (readInviteHandler(true) !== previous) throw new ForkAppError(`could not restore opendesign:// to ${previous}`);
+      context.inviteRestorePending = false;
+      say(`      opendesign:// -> ${previous} again`);
       return;
     }
     case "wait-for-launch": {
       const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
       let processes = instanceProcesses(identity, appPath);
       while (!hasLaunched(processes) && Date.now() < deadline) {
-        await new Promise((resolveWait) => setTimeout(resolveWait, 2000));
+        await delay(2000, undefined, { signal: context.signal });
         processes = instanceProcesses(identity, appPath, true);
       }
       if (!hasLaunched(processes)) {
@@ -500,14 +566,53 @@ async function runInternal(context: ExecutionContext, action: InternalAction): P
 }
 
 async function executePlan(context: ExecutionContext, plan: readonly PlanStep[]): Promise<void> {
-  for (const [index, step] of plan.entries()) {
-    say(`==> [${index + 1}/${plan.length}] ${describeStep(step)}`);
-    if (step.kind === "run") {
-      assertMutationAllowed(context, step);
-      await runCommand(step.argv, step.cwd, step.env);
-    } else {
-      await runInternal(context, step.action);
+  let failure: unknown;
+  try {
+    for (const [index, step] of plan.entries()) {
+      context.signal?.throwIfAborted();
+      say(`==> [${index + 1}/${plan.length}] ${describeStep(step)}`);
+      if (step.kind === "run") {
+        if (step.argv[0] === 'open' && context.inviteRestorePending) context.inviteLaunchStarted = true;
+        assertMutationAllowed(context, step);
+        await runCommand(step.argv, step.cwd, step.env, context.signal);
+      } else {
+        await runInternal(context, step.action);
+      }
     }
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    if (context.inviteRestorePending) {
+      try {
+        const recovery = { ...context, signal: undefined, inviteLaunchStopped: true };
+        if (context.inviteLaunchStarted) {
+          const stop = plan.find((step): step is RunStep => step.kind === 'run' && step.argv[0] === 'pnpm'
+            && step.argv.includes('tools-pack') && step.argv.includes('stop'));
+          if (!stop) throw new ForkAppError('cannot safely restore invite ownership without the Dev stop step');
+          await runCommand(stop.argv, stop.cwd, stop.env);
+          if ((await waitForExit(recovery, 20_000)).length) throw new ForkAppError('Dev is still running; invite ownership recovery could not finish');
+        }
+        await runInternal(recovery, { type: 'restore-invite-handler' });
+        context.inviteRestorePending = false;
+      } catch (cleanupError) {
+        if (failure) throw new AggregateError([failure, cleanupError], 'fork-app failed and invite ownership recovery also failed');
+        throw cleanupError;
+      }
+    }
+  }
+}
+
+async function withInterruptions<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const interrupt = () => controller.abort(new ForkAppError('interrupted; recovering temporary invite ownership'));
+  process.once('SIGINT', interrupt);
+  process.once('SIGTERM', interrupt);
+  try {
+    return await task(controller.signal);
+  } finally {
+    process.removeListener('SIGINT', interrupt);
+    process.removeListener('SIGTERM', interrupt);
   }
 }
 
@@ -543,14 +648,24 @@ async function commandBuild(instance: "dev" | "stable", options: ForkOptions): P
   }
   const repoVersion = await repoVersionAt(commit);
 
-  const installed = await readInstalledApp(appPath);
-  assertOwnedApp(identity, appPath, installed);
   const other = forkInstanceIdentity(instance === "dev" ? "stable" : "dev");
-  const otherInstalled = await readInstalledApp(instanceAppPath(paths, other));
-  const state = await readState(paths);
+  const readInputs = async () => {
+    const installed = await readInstalledApp(appPath);
+    assertOwnedApp(identity, appPath, installed);
+    return {
+      installed,
+      otherInstalled: await readInstalledApp(instanceAppPath(paths, other)),
+      state: await readState(paths),
+      launcherVersions: await readLauncherVersions(identity, installed),
+      worktree: inspectBuildWorktree(paths),
+      kept: await listKeptCopies(paths),
+    };
+  };
+  const snapshot = await readInputs();
+  const { installed, otherInstalled, state, launcherVersions, worktree, kept } = snapshot;
   const knownVersions = [
     ...(installed?.version == null ? [] : [installed.version]),
-    ...await readLauncherVersions(identity, installed),
+    ...launcherVersions,
     ...state.instances[instance].map((record) => record.version),
   ];
   const next = computeNextVersion({
@@ -573,8 +688,6 @@ async function commandBuild(instance: "dev" | "stable", options: ForkOptions): P
     if (!options.dryRun) throw new ForkAppError(message);
     say(`warning: ${message}`);
   }
-  const worktree = inspectBuildWorktree(paths);
-  const kept = await listKeptCopies(paths);
   const plan = buildInstallPlan({
     arch: process.arch,
     commit,
@@ -624,7 +737,9 @@ async function commandBuild(instance: "dev" | "stable", options: ForkOptions): P
   }
 
   const startedAt = Date.now();
-  await withLock(paths, async () => executePlan({ identity, paths }, plan));
+  await withLock(paths, () => withInterruptions(signal => executePlan({ identity, paths, signal }, plan)), {
+    expected: snapshot, read: readInputs,
+  });
   const minutes = ((Date.now() - startedAt) / 60_000).toFixed(1);
   say(`\nDone in ${minutes} min: ${identity.productName} ${next.version} from ${commit.slice(0, 9)} (${ref}).`);
   if (instance === "dev" && options.launch && options.claimInviteLinks) {
@@ -640,22 +755,29 @@ async function commandRollback(options: ForkOptions): Promise<void> {
   const identity = forkInstanceIdentity("stable");
   const appPath = instanceAppPath(paths, identity);
   preflight();
-  const installed = await readInstalledApp(appPath);
-  assertOwnedApp(identity, appPath, installed);
-  const kept = await listKeptCopies(paths);
-  const target = selectRollbackTarget(kept, installed?.version ?? null, options.to);
-  if (target == null) {
-    throw new ForkAppError(options.to == null
-      ? `no kept stable copy to roll back to under ${paths.keptRoot}`
-      : `no kept stable copy for version ${options.to}; kept: ${kept.map((copy) => copy.version).join(", ") || "(none)"}`);
-  }
+  const readInputs = async () => {
+    const installed = await readInstalledApp(appPath);
+    assertOwnedApp(identity, appPath, installed);
+    const kept = await listKeptCopies(paths);
+    const target = selectRollbackTarget(kept, installed?.version ?? null, options.to);
+    if (target == null) {
+      throw new ForkAppError(options.to == null
+        ? `no kept stable copy to roll back to under ${paths.keptRoot}`
+        : `no kept stable copy for version ${options.to}; kept: ${kept.map((copy) => copy.version).join(", ") || "(none)"}`);
+    }
+    const targetApp = await readInstalledApp(target.appPath);
+    if (!targetApp) throw new ForkAppError(`no kept bundle at ${target.appPath}`);
+    assertOwnedApp(identity, target.appPath, targetApp);
+    return { installed, kept, target, targetApp, state: await readState(paths) };
+  };
+  const snapshot = await readInputs();
+  const { installed, kept, target, targetApp, state } = snapshot;
   const running = liveProcesses(instanceProcesses(identity, appPath)).length > 0;
   if (running && !options.quitRunning) {
     const message = `${identity.productName} is running. Quit it (Cmd-Q) and re-run, or pass --quit-running.`;
     if (!options.dryRun) throw new ForkAppError(message);
     say(`warning: ${message}`);
   }
-  const state = await readState(paths);
   const plan = buildRollbackPlan({
     identity,
     installed,
@@ -666,6 +788,7 @@ async function commandRollback(options: ForkOptions): Promise<void> {
     quitRunning: options.quitRunning,
     running,
     target,
+    targetApp,
     toolsPackAvailable: existsSync(path.join(paths.buildWorktree, "tools", "pack", "dist")),
   });
   printPlan(plan);
@@ -683,7 +806,9 @@ async function commandRollback(options: ForkOptions): Promise<void> {
     say("\nDry run: nothing was changed.");
     return;
   }
-  await withLock(paths, async () => executePlan({ identity, paths }, plan));
+  await withLock(paths, () => withInterruptions(signal => executePlan({ identity, paths, signal }, plan)), {
+    expected: snapshot, read: readInputs,
+  });
   say(`\nRolled back ${identity.productName} to ${target.version}.`);
 }
 

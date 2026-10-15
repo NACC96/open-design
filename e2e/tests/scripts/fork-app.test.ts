@@ -533,6 +533,7 @@ describe("fork-app rollback", () => {
       quitRunning: false,
       running: false,
       target,
+      targetApp: { ...installedStable, version: target.version },
       toolsPackAvailable: false,
     });
     const keep = indexOfStep(plan, (step) => isRun(step, "ditto") && step.kind === "run" && step.argv[1] === instanceAppPath(paths, stable));
@@ -560,12 +561,46 @@ describe("fork-app rollback", () => {
       quitRunning: true,
       running: true,
       target: copies[0]!,
+      targetApp: installedStable,
       toolsPackAvailable: false,
     };
     expect(() => buildRollbackPlan({ ...base, identity: dev })).toThrow(/stable/);
     expect(() => buildRollbackPlan({ ...base, identity: stable })).toThrow(/tools-pack/);
     expect(runSteps(buildRollbackPlan({ ...base, identity: stable, toolsPackAvailable: true })).some((step) => step.argv.includes("stop")))
       .toBe(true);
+  });
+
+  test('admits a legacy kept bundle before disabling updates on the staged restore', () => {
+    const target = copies[0]!;
+    const plan = buildRollbackPlan({
+      identity: stable, installed: installedStable, installedCommit: null,
+      keptVersions: [], launch: false, paths, quitRunning: false, running: false,
+      target, targetApp: { ...installedStable, version: target.version, updateEnabled: null },
+      toolsPackAvailable: false,
+    });
+    const verifyKept = plan[0];
+    expect(verifyKept?.kind === 'internal' && verifyKept.action.type === 'verify-app' && verifyKept.action.expect.updateEnabled).toBeNull();
+    const disable = indexOfStep(plan, step => isInternal(step, 'disable-updates'));
+    const stage = indexOfStep(plan, step => isRun(step, 'ditto') && step.kind === 'run' && step.argv[1] === target.appPath);
+    const move = indexOfStep(plan, step => isRun(step, 'mv') && step.kind === 'run' && step.argv[2] === instanceAppPath(paths, stable));
+    expect(stage).toBeLessThan(disable);
+    expect(disable).toBeLessThan(move);
+    expect(plan.slice(disable, move).some(step => isRun(step, 'codesign', '--force'))).toBe(true);
+  });
+
+  test('uses the kept bundle data root when the installed bundle is missing', () => {
+    const target = copies[0]!;
+    const plan = buildRollbackPlan({
+      identity: stable, installed: null, installedCommit: null, keptVersions: [],
+      launch: false, paths, quitRunning: false, running: false, target,
+      targetApp: { ...installedStable, version: target.version }, toolsPackAvailable: false,
+    });
+    const verifications = plan.filter(step => isInternal(step, 'verify-app'));
+    expect(verifications).toHaveLength(2);
+    for (const step of verifications) {
+      expect(step.kind === 'internal' && step.action.type === 'verify-app' && step.action.expect.namespaceBaseRoot).toBe(BAKED_ROOT);
+    }
+    expect(plan.some(step => isInternal(step, 'assert-launcher-version'))).toBe(true);
   });
 });
 

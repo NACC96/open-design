@@ -158,6 +158,14 @@ bundle first, so a rollback can be undone, and it needs `--yes`. A rollback
 restores the app but not the data. If the newer build migrated the database
 schema, the older app may not open that library correctly.
 
+Before replacing anything, rollback refuses if the namespace's launcher state
+can select a payload newer than the kept app. Clear the update cache through
+the app before retrying; the script does not rewrite launcher pointers. A
+legacy kept bundle without an updater opt-out is accepted, then its staged
+restore has updates disabled and is re-signed before installation. The kept
+copy remains unchanged. If the installed bundle is missing, the kept bundle
+supplies the namespace-root expectation.
+
 ## Tool state, kept copies, and tags
 
 - `~/Library/Application Support/open-design-fork-apps/state.json` records
@@ -171,6 +179,18 @@ schema, the older app may not open that library correctly.
 
 None of this lives inside daemon data. A lock file in the state folder stops
 two runs from overlapping.
+
+An existing lock is never reclaimed automatically, including an empty lock
+whose creator has not written its PID yet. Inspect a stale lock and confirm
+its run has ended before explicitly removing it. A run releases only its own
+lock. After confirmation and lock acquisition, the script rechecks the
+installation, kept copies, and planning inputs; changed inputs require a new
+plan instead of executing an outdated one.
+
+State writes replace the JSON file atomically and retain the last valid
+version in `state.json.backup`. An incomplete current JSON file recovers from
+that backup with a notice; without a valid backup, the command stops for
+manual recovery rather than discarding the history.
 
 ## Running apps
 
@@ -198,6 +218,9 @@ before it moves anything.
   launch (`apps/desktop/src/main/invite-deeplink.ts`). Only one app can own
   the scheme at a time. `dev` records the owner before it launches Dev and
   hands the scheme back afterwards, so Stable keeps receiving invite links.
+  Restoration waits for Dev's actual startup claim. A launch failure or
+  handled SIGINT/SIGTERM stops Dev before restoring the previous handler,
+  preventing a delayed startup from claiming it again after recovery.
   Pass `--claim-invite-links` to test invites on Dev. Opening Dev yourself,
   from Finder or the Dock, still claims the scheme; relaunch Stable to take it
   back. `status` shows the current owner.
