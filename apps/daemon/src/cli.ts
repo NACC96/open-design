@@ -2286,6 +2286,7 @@ Common options:
                             create it; the daemon renders it with its pinned
                             HyperFrames runtime.
   --image <path>            Project-relative reference image; repeat for multiple references.
+                            Codex Subscription allows at most 5 distinct references.
                             The first video image is the first frame; the rest
                             are references. Existing providers still receive
                             the first image through the legacy single-image field.

@@ -59,6 +59,7 @@ function expectHelp(result: Awaited<ReturnType<typeof runMedia>>) {
   expect(result.stdout).toContain('--model    Model id from /api/media/models');
   expect(result.stdout).toContain('codex-gpt-image-2 uses the local Codex CLI ChatGPT login');
   expect(result.stdout).not.toContain('OpenDesign Cloud images');
+  expect(result.stdout).toContain('Codex Subscription allows at most 5 distinct references.');
 }
 
 describe('od media help', () => {

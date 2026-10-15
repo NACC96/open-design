@@ -368,6 +368,15 @@ async function findGeneratedImage(threadDir: string): Promise<{ file: string; ex
 }
 
 export async function renderCodexImage(input: CodexImageRenderInput): Promise<CodexImageRenderResult> {
+  // Applies after the shared dispatcher resolves/deduplicates references, and
+  // before config probing or a subscription turn can start. Codex 0.162.1's
+  // built-in image tool limits both reference paths and attached images to five.
+  if (input.imageRefs.length > 5) {
+    throw new CodexImagegenError(
+      'Codex Subscription accepts at most 5 distinct reference images. Remove extra references and retry.',
+      { retryable: false },
+    );
+  }
   const launch = await resolveCodexLaunch(input.dataDir);
   const command = launch.command;
   const { status, authConfig } = await codexReadiness(launch);

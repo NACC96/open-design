@@ -304,6 +304,31 @@ describe('Codex Subscription image provider', () => {
     expect(call!.stdin).toContain('The attached image is the reference');
   });
 
+  it.each(['codex-gpt-image-2', 'vela/gpt-image-2'])('rejects six distinct references for %s before any Codex process starts', async model => {
+    const fake = await installFakeCodex(root);
+    process.env.CODEX_BIN = fake.bin;
+    const projectDir = path.join(projectsRoot, 'project-1');
+    await mkdir(projectDir, { recursive: true });
+    const images = Array.from({ length: 6 }, (_, i) => `ref-${i}.png`);
+    await Promise.all(images.map(name => writeFile(path.join(projectDir, name), Buffer.from(PNG_BASE64, 'base64'))));
+
+    await expect(generate({ model, images })).rejects.toThrow(/at most 5.*Remove.*retry/);
+    expect(await fake.invocations()).toEqual([]);
+  });
+
+  it('accepts five distinct references and deduplicates repeated primary references', async () => {
+    const fake = await installFakeCodex(root);
+    process.env.CODEX_BIN = fake.bin;
+    const projectDir = path.join(projectsRoot, 'project-1');
+    await mkdir(projectDir, { recursive: true });
+    const images = Array.from({ length: 5 }, (_, i) => `ref-${i}.png`);
+    await Promise.all(images.map(name => writeFile(path.join(projectDir, name), Buffer.from(PNG_BASE64, 'base64'))));
+
+    await generate({ image: images[0], images: [...images, images[0]!] });
+    const [call] = await fake.calls();
+    expect(call!.args.filter(arg => arg === '--image')).toHaveLength(5);
+  });
+
   it('honours app-config Codex CLI overrides from the daemon data root', async () => {
     const dataDir = path.join(root, 'data-root');
     const configuredHome = path.join(root, 'configured-codex-home');
