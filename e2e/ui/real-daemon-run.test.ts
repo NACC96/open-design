@@ -102,6 +102,79 @@ test.afterEach(async ({ page }) => {
   await resetDaemonAppConfig(page);
 });
 
+test('[P1] fork a brief into an editable independent project before sending', async ({ page }, testInfo) => {
+  const sourceId = `fork-brief-${Date.now()}`;
+  const { conversationId } = await createProjectViaApi(page, sourceId, 'Price list source');
+  const brief = 'Create a price list using the attached prices and logo.';
+  const logo = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAL0lEQVR4nO3OIQEAAAgDMJoRhHI0hRg3E/Ornr2kEhAQEBAQEBAQEBAQEBAQSAceeUPkefm+hQgAAAAASUVORK5CYII=';
+  for (const file of [
+    { name: 'inputs/prices.csv', content: 'Product,Price\nShampoo,10.00\n' },
+    { name: 'logo.png', content: logo, encoding: 'base64' },
+    { name: 'old-output.txt', content: 'This generated output should stay in the source.' },
+  ]) {
+    const response = await page.request.post(`/api/projects/${sourceId}/files`, { data: file });
+    expect(response.ok(), await response.text()).toBeTruthy();
+  }
+  const instructions = await page.request.patch(`/api/projects/${sourceId}`, { data: { customInstructions: 'Preserve the exact prices.' } });
+  expect(instructions.ok()).toBeTruthy();
+  const sourceMessage = await page.request.put(`/api/projects/${sourceId}/conversations/${conversationId}/messages/${sourceId}-brief`, {
+    data: { id: `${sourceId}-brief`, role: 'user', content: brief, attachments: [
+      { name: 'prices.csv', path: 'inputs/prices.csv', kind: 'file', order: 0 },
+      { name: 'logo.png', path: 'logo.png', kind: 'image', order: 1 },
+    ] },
+  });
+  expect(sourceMessage.ok()).toBeTruthy();
+  await openProjectFromProjectsView(page, sourceId);
+  await expectWorkspaceReady(page);
+  await page.getByTestId('user-message').hover();
+  const forkAction = page.getByRole('button', { name: 'Fork into new project', exact: true });
+  await expect(forkAction).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('fork-entry.png') });
+  const runRequests: Request[] = [];
+  const observeRun = (request: Request) => { if (isCreateRunRequest(request)) runRequests.push(request); };
+  page.on('request', observeRun);
+  const forkResponse = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith(`/api/projects/${sourceId}/fork`));
+  await forkAction.click();
+  const response = await forkResponse;
+  expect(response.status()).toBe(201);
+  const fork = await response.json() as { project: { id: string; customInstructions: string }; conversationId: string; copiedFiles: string[] };
+  expect(fork.project.id).not.toBe(sourceId);
+  expect(fork.project.customInstructions).toBe('Preserve the exact prices.');
+  expect(fork.copiedFiles).toEqual(['inputs/prices.csv', 'logo.png']);
+  await expect(page).toHaveURL(new RegExp(`/projects/${fork.project.id}`));
+  await expectWorkspaceReady(page);
+  const input = page.getByTestId('chat-composer-input');
+  await expect(input).toHaveText(brief);
+  await expect(page.getByTestId('staged-attachments').locator('img')).toHaveCount(1);
+  await expect(page.getByText('Price list source Fork', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: /^Loading/ })).toHaveCount(0);
+  await expect.poll(() => page.getByTestId('staged-attachments').locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(32);
+  await page.screenshot({ path: testInfo.outputPath('fork-editable-draft.png') });
+  const edited = 'Create a deterministic smoke artifact with these prices and logo.';
+  await input.fill(edited);
+  const draftKey = `od:chat-composer:draft:${fork.project.id}:${fork.conversationId}`;
+  await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), draftKey)).toBe(edited);
+  // Source deletion proves the draft's assets no longer depend on it.
+  expect((await page.request.delete(`/api/projects/${sourceId}`)).ok()).toBeTruthy();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expectWorkspaceReady(page);
+  await expect(input).toHaveText(edited);
+  await expect(page.getByTestId('staged-attachments').locator('img')).toHaveCount(1);
+  await expect.poll(() => page.getByTestId('staged-attachments').locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(32);
+  expect(runRequests).toHaveLength(0);
+  const copiedLogo = await page.request.get(`/api/projects/${fork.project.id}/raw/logo.png`);
+  expect(copiedLogo.ok()).toBeTruthy();
+  expect(await copiedLogo.body()).toEqual(Buffer.from(logo, 'base64'));
+  await sendPrompt(page, edited);
+  expect(runRequests).toHaveLength(1);
+  const submitted = runRequests[0]!.postDataJSON();
+  expect(submitted.projectId).toBe(fork.project.id);
+  expect(submitted.conversationId).toBe(fork.conversationId);
+  expect(submitted.attachments).toEqual(['inputs/prices.csv', 'logo.png']);
+  await expectProjectFilesToContain(page, fork.project.id, [GENERATED_FILE]);
+  page.off('request', observeRun);
+});
+
 test('[P0] real daemon run streams, persists, and previews an artifact', async ({ page }) => {
   await createProject(page, 'Real daemon run smoke');
   await expectWorkspaceReady(page);

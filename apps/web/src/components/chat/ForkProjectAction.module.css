@@ -1,0 +1,21 @@
+.action.action {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--chat-message-muted-ink);
+}
+
+.action.action:hover {
+  background: var(--chat-bg-subtle);
+}
+
+.action.action:focus-visible {
+  outline: 2px solid var(--chat-accent);
+  outline-offset: 1px;
+}

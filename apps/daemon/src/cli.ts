@@ -7027,6 +7027,9 @@ async function runProject(args) {
                     the design-system generation prompt.
   od project duplicate <id> [--name "<title>"] [--json]
                     Duplicate a project and copy its Design Files.
+  od project fork <id> --conversation <id> --message <id> [--name "<title>"]
+                    [--prompt-file <path|->] [--json]
+                    Copy a saved brief and its attachments into an editable new project.
   od project import <baseDir> [--name "<title>"]
   od project import-folder <path> [--name "<title>"] [--skill <id>]
                     [--design-system <id>] [--json]
@@ -7295,6 +7298,26 @@ Common options:
         `[project] created design system project ${data.project?.id ?? '-'} from ${sourceProjectId} `
         + `(design system ${data.designSystemId ?? '-'}, conversation ${data.conversationId ?? '-'})`,
       );
+      return;
+    }
+    case 'fork': {
+      const sourceProjectId = positionalArgs(rest, PROJECT_RESOURCE_STRING_FLAGS)[0];
+      if (!sourceProjectId || !flags.conversation || !flags.message) {
+        console.error('Usage: od project fork <id> --conversation <id> --message <id> [--name "<title>"] [--prompt-file <path|->] [--json]');
+        process.exit(2);
+      }
+      const prompt = await readPromptFromFlags(flags);
+      const body = {
+        sourceConversationId: flags.conversation,
+        sourceMessageId: flags.message,
+        ...(typeof flags.name === 'string' ? { name: flags.name } : {}),
+        ...(typeof prompt === 'string' ? { prompt } : {}),
+      };
+      const data = await postJsonToDaemon(
+        base, `/api/projects/${encodeURIComponent(sourceProjectId)}/fork`, body, workspaceHeaders,
+      );
+      if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+      console.log(`[project] forked ${sourceProjectId} as ${data.project.id} (conversation ${data.conversationId}); draft ready to edit`);
       return;
     }
     case 'duplicate': {

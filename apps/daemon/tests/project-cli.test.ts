@@ -71,6 +71,11 @@ async function startProjectStubServer(): Promise<StubServer> {
         }));
         return;
       }
+      if (captured.method === 'POST' && captured.url === '/api/projects/source-project/fork') {
+        res.statusCode = 201;
+        res.end(JSON.stringify({ project: { id: 'fork-1', name: 'New brief' }, conversationId: 'fork-chat', copiedFiles: ['logo.png'] }));
+        return;
+      }
       if (captured.method === 'GET' && captured.url === '/api/projects/project-1') {
         res.statusCode = 200;
         res.end(JSON.stringify({
@@ -334,6 +339,36 @@ describe('od project CLI', () => {
       name: 'Design Copy',
       pendingPrompt: 'Use this workspace as the brand source.\n',
     });
+  });
+
+  it('forks a saved brief with workspace headers, a prompt file, and JSON output', async () => {
+    stub = await startProjectStubServer();
+    tempRoot = mkdtempSync(join(tmpdir(), 'od-project-fork-cli-'));
+    const promptPath = join(tempRoot, 'brief.md');
+    writeFileSync(promptPath, 'New direction.\nKeep the logo.\n');
+    const result = await runCli([
+      'project', 'fork', 'source-project', '--conversation', 'source-chat', '--message', 'brief',
+      '--name', 'New brief', '--prompt-file', promptPath, '--workspace', 'ws-1', '--workspace-member', 'member-1',
+      '--json', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toMatchObject({ project: { id: 'fork-1' }, conversationId: 'fork-chat' });
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toMatchObject({ method: 'POST', url: '/api/projects/source-project/fork', headers: {
+      'x-od-workspace-id': 'ws-1', 'x-od-workspace-member-id': 'member-1',
+    } });
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({
+      sourceConversationId: 'source-chat', sourceMessageId: 'brief', name: 'New brief', prompt: 'New direction.\nKeep the logo.\n',
+    });
+  });
+
+  it('omits a fork prompt override when none was supplied', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'fork', 'source-project', '--conversation', 'source-chat', '--message', 'brief', '--daemon-url', stub.baseUrl]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('draft ready to edit');
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({ sourceConversationId: 'source-chat', sourceMessageId: 'brief' });
   });
 
   it('duplicates a project and prints the human-readable result', async () => {

@@ -311,6 +311,8 @@ interface Props {
   // the user cannot type into the composer at all.
   inputDisabled?: boolean;
   initialDraft?: string;
+  initialAttachments?: ChatAttachment[];
+  onInitialDraftPersisted?: () => void;
   /**
    * 别人家的「在传中」卡片,借这个托盘画一下。
    *
@@ -576,6 +578,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       composerPlaceholder,
       placeholderScenarios = [],
       draftStorageKey,
+      initialAttachments,
+      onInitialDraftPersisted,
       onEnsureProject,
       commentAttachments = [],
       onRemoveCommentAttachment,
@@ -626,13 +630,22 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         ? activeProjectFileName
         : null;
     const activeFileDisplayName = activeFileContext ? lastPathSegment(activeFileContext) : null;
-    const [draft, setDraft] = useState(() => initialDraft ?? loadComposerDraft(draftStorageKey) ?? "");
     /*
      * 刷新之后要回来的**整份**负载。读一次就够 —— 会话一换,`ProjectView` 会拿
      * `${project.id}:${activeConversationId}` 当 key 把整棵 ChatPane 重挂,
      * 这个 useRef 跟着重建,所以「按会话隔离」是挂载边界保证的,不靠这里判。
      */
     const restoredExtrasRef = useRef(loadComposerDraftExtras(draftStorageKey));
+    const preserveAttachmentsRef = useRef(initialAttachments !== undefined || restoredExtrasRef.current.preserveAttachments === true);
+    const hasStoredForkDraft = restoredExtrasRef.current.preserveAttachments === true;
+    const [draft, setDraft] = useState(() => hasStoredForkDraft
+      ? loadComposerDraft(draftStorageKey) ?? ''
+      : initialDraft ?? loadComposerDraft(draftStorageKey) ?? '');
+    const initialStagedRef = useRef(normalizeChatAttachmentOrders(
+      initialAttachments !== undefined && !hasStoredForkDraft
+        ? initialAttachments
+        : restoredExtrasRef.current.attachments,
+    ));
     const [placeholderScenario, setPlaceholderScenario] = useState<PlaceholderScenario | null>(null);
     const composerRootRef = useRef<HTMLDivElement | null>(null);
     const pendingSessionModeRef = useRef<ChatSessionMode | null>(null);
@@ -669,12 +682,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // 2026-05-20 04:08 for the rationale.
     // 附件存的是**项目里的相对路径**,不是文件本身 —— 刷新之后原样成立,直接回来。
     const [staged, setStaged] = useState<ChatAttachment[]>(
-      () => normalizeChatAttachmentOrders(restoredExtrasRef.current.attachments),
+      () => initialStagedRef.current,
     );
     // Manual editor height set by dragging the shell's gray backdrop up/down.
     // null = the default auto-grow min/max behavior.
     const [manualEditorHeight, setManualEditorHeight] = useState<number | null>(null);
-    const nextAttachmentOrderRef = useRef(nextChatAttachmentOrder(restoredExtrasRef.current.attachments));
+    const nextAttachmentOrderRef = useRef(nextChatAttachmentOrder(initialStagedRef.current));
     const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
     const [figmaModalOpen, setFigmaModalOpen] = useState(false);
     const [figmaHelpOpen, setFigmaHelpOpen] = useState(false);
@@ -1000,7 +1013,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // mark it seeded immediately, so an early clear by the user (typing or
     // backspace before the parent stops passing initialDraft) does not get
     // overwritten by the effect.
-    const seededRef = useRef(Boolean(initialDraft));
+    const seededRef = useRef(Boolean(initialDraft) || hasStoredForkDraft || initialAttachments !== undefined);
 
     useEffect(() => {
       if (seededRef.current) return;
@@ -1082,8 +1095,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
      * 攒上去的东西跟着写下去。`reset()` 把这几样清空之后,这里写出的是空负载 ——
      * 空负载不落盘,于是「发出去了」和「草稿没了」是同一件事,不需要单独去 remove。
      */
+    const initialDraftAcknowledgedRef = useRef(false);
     useEffect(() => {
-      saveComposerDraftExtras(draftStorageKey, {
+      if (preserveAttachmentsRef.current && !saveComposerDraft(draftStorageKey, draft)) return;
+      const stored = saveComposerDraftExtras(draftStorageKey, {
+        ...(preserveAttachmentsRef.current ? { preserveAttachments: true } : {}),
         attachments: staged,
         commentAttachments: stagedVisualComments,
         quotes: quotes ?? [],
@@ -1097,8 +1113,17 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           workspaceItems: stagedWorkspaceContexts,
         },
       });
+      if (
+        stored && preserveAttachmentsRef.current && !initialDraftAcknowledgedRef.current
+        && onInitialDraftPersisted
+      ) {
+        initialDraftAcknowledgedRef.current = true;
+        onInitialDraftPersisted();
+      }
     }, [
       draftStorageKey,
+      draft,
+      onInitialDraftPersisted,
       staged,
       stagedVisualComments,
       quotes,
@@ -6710,16 +6735,18 @@ function loadComposerDraft(key?: string): string | null {
   }
 }
 
-function saveComposerDraft(key: string | undefined, draft: string) {
-  if (!key || typeof window === 'undefined') return;
+function saveComposerDraft(key: string | undefined, draft: string): boolean {
+  if (!key || typeof window === 'undefined') return false;
   try {
     if (draft) {
       window.localStorage.setItem(key, draft);
     } else {
       window.localStorage.removeItem(key);
     }
+    return true;
   } catch {
     // Storage can be unavailable in privacy modes; the composer should still work.
+    return false;
   }
 }
 

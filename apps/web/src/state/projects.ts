@@ -24,6 +24,8 @@ import type {
   CreateDesignSystemProjectFromProjectResponse,
   CreateProjectExampleReference,
   DuplicateProjectResponse,
+  ForkProjectRequest,
+  ForkProjectResponse,
   CreatePluginShareProjectResponse,
   CreateTerminalRequest,
   ImportFolderRequest,
@@ -868,6 +870,29 @@ export async function createDesignSystemProjectFromProject(
   } catch (err) {
     throw err instanceof Error ? err : new Error('Could not create design system');
   }
+}
+
+export class ProjectForkRequestError extends Error {
+  constructor(public readonly code: string, public readonly attachmentName?: string) {
+    super(code);
+  }
+}
+
+export async function forkProject(
+  projectId: string,
+  input: ForkProjectRequest,
+  workspaceContext?: WorkspaceCollabContext | null,
+): Promise<ForkProjectResponse> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(workspaceContext ? workspaceProjectHeaders(workspaceContext) : {}) },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ProjectForkRequestError(body.error?.code ?? 'FORK_FAILED', body.error?.details?.attachmentName);
+  }
+  return response.json() as Promise<ForkProjectResponse>;
 }
 
 export async function duplicateProject(

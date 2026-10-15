@@ -48,6 +48,8 @@ import { assistantMessageNeverHadARun } from '../runtime/chat/host-authored-mess
 import { resolveRecoveryActionBlockReason } from '../runtime/chat/recovery-gating';
 import { canRetainSuccessfulRunForBlockedStrategy } from '../runtime/blocked-strategy-result';
 import { loadConversationTranscript } from '../state/load-conversation-transcript';
+import { ProjectForkRequestError } from '../state/projects';
+import type { ForkProjectRequest } from '@open-design/contracts';
 import { normalizeCustomReason } from '@open-design/contracts/analytics';
 import {
   deletePreviewComment,
@@ -939,6 +941,7 @@ interface Props {
     sourceProjectId: string,
     input?: { name?: string },
   ) => Promise<void> | void;
+  onForkProject?: (sourceProjectId: string, input: ForkProjectRequest) => Promise<void>;
   /** Lets the shell spend the optional memory-notification SSE slot only while
    * this project can produce a post-run extraction. */
   onRunActivityChange?: (projectId: string, active: boolean) => void;
@@ -2145,6 +2148,7 @@ export function ProjectView({
   onCreateProjectFromDesignSystem,
   onCreateDesignSystemFromProject,
   onDuplicateProject,
+  onForkProject,
   onRunActivityChange,
   creationHandoff = null,
   onCreationHandoffSettled,
@@ -2639,6 +2643,9 @@ export function ProjectView({
   const [messageLoadRetryNonce, setMessageLoadRetryNonce] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
+  const [forkingProjectMessageId, setForkingProjectMessageId] = useState<string | null>(null);
+  const forkingProjectRef = useRef(false);
+  const [persistedUserMessageIds, setPersistedUserMessageIds] = useState<Set<string>>(() => new Set());
   const [activePluginActionPaths, setActivePluginActionPaths] = useState<Set<string>>(() => new Set());
   const [hiddenAssistantPluginActionPaths, setHiddenAssistantPluginActionPaths] = useState<Set<string>>(() => new Set());
   const [forceStreamingPluginMessageIds, setForceStreamingPluginMessageIds] = useState<Set<string>>(() => new Set());
@@ -4071,6 +4078,7 @@ export function ProjectView({
           transcriptController.signal,
         );
         if (cancelled) return;
+        setPersistedUserMessageIds(new Set(list.filter((message) => message.role === 'user').map((message) => message.id)));
         // Capture ownership when this GET is admitted, before queuing React's
         // updater. The same batch may next clear the controller on terminal
         // status and enqueue its final buffer flush. Reading refs inside the
@@ -5433,6 +5441,8 @@ export function ProjectView({
       void saveMessage(project.id, activeConversationId, m, {
         ...options,
         workspaceContext: projectRunWorkspaceContext,
+      }).then((stored) => {
+        if (stored?.role === 'user') setPersistedUserMessageIds((current) => new Set(current).add(stored.id));
       });
     },
     [project.id, activeConversationId, projectRunWorkspaceContext],
@@ -9016,6 +9026,7 @@ export function ProjectView({
               workspaceContext: projectRunWorkspaceContext,
             }),
           ).then((stored) => {
+            if (stored?.role === 'user') setPersistedUserMessageIds((current) => new Set(current).add(stored.id));
             if (!stored || stored.content === userMsg.content) return;
             setMessages((current) =>
               current.map((message) =>
@@ -12780,6 +12791,9 @@ export function ProjectView({
   );
   useEffect(() => {
     const pendingPrompt = project.pendingPrompt;
+    // Fork drafts are acknowledged by the composer only after BOTH the text
+    // and complete attachment list have reached durable draft storage.
+    if (project.metadata?.pendingDraftConversationId) return;
     if (!pendingPrompt) return;
     if (autoSendFirstMessageRef.current) {
       autoSendSeedRef.current = pendingPrompt;
@@ -12792,7 +12806,10 @@ export function ProjectView({
         : { projectId: project.id, value: pendingPrompt },
     );
     onClearPendingPrompt();
-  }, [project.id, project.pendingPrompt, onClearPendingPrompt]);
+  }, [project.id, project.pendingPrompt, project.metadata?.pendingDraftConversationId, onClearPendingPrompt]);
+  const initialForkAttachments = project.metadata?.pendingDraftConversationId === activeConversationId
+    ? project.metadata.pendingAttachments ?? []
+    : undefined;
   const chatInitialDraft =
     chatSeed?.value ??
     (
@@ -13171,6 +13188,29 @@ export function ProjectView({
     projectFiles,
     projectIsDesignSystemProject,
   ]);
+
+  const handleForkProject = useCallback(async (message: ChatMessage) => {
+    if (forkingProjectRef.current || !onForkProject || !activeConversationId || projectMutationReadOnly) return;
+    if (!persistedUserMessageIds.has(message.id)) return;
+    forkingProjectRef.current = true;
+    setForkingProjectMessageId(message.id);
+    try {
+      await onForkProject(project.id, { sourceConversationId: activeConversationId, sourceMessageId: message.id });
+    } catch (error) {
+      const code = error instanceof ProjectForkRequestError ? error.code : 'FORK_FAILED';
+      const messageText = code === 'FORK_ATTACHMENT_UNAVAILABLE' && error instanceof ProjectForkRequestError
+        ? t('chat.forkProjectAttachmentUnavailable', { name: error.attachmentName ?? '' })
+        : code === 'FORK_MESSAGE_NOT_FOUND'
+          ? t('chat.forkProjectMessageUnavailable')
+          : code === 'FORK_PLUGIN_UNAVAILABLE'
+            ? t('chat.forkProjectPluginUnavailable')
+            : t('chat.forkProjectFailed');
+      setProjectActionsToast({ message: messageText, details: null, tone: 'error' });
+    } finally {
+      forkingProjectRef.current = false;
+      setForkingProjectMessageId(null);
+    }
+  }, [activeConversationId, onForkProject, persistedUserMessageIds, project.id, projectMutationReadOnly, t]);
 
   const handleDuplicateProject = useCallback(() => {
     if (projectDuplicateStarting || !onDuplicateProject) return;
@@ -13781,6 +13821,8 @@ export function ProjectView({
               shareToOpenDesignBusyMessageId={shareToOpenDesignBusyMessageId}
               forceStreamingMessageIds={forceStreamingPluginMessageIds}
               initialDraft={chatInitialDraft}
+              initialAttachments={initialForkAttachments}
+              onInitialDraftPersisted={initialForkAttachments !== undefined ? onClearPendingPrompt : undefined}
               onboardingStarterPath={onboardingEntryRef.current?.productType ?? null}
               questionFormSubmitDisabled={currentConversationActionDisabled}
               onSubmitQuestionForm={async (text, attachments = [], context, sourceAssistantMessageId, formId) => {
@@ -13855,6 +13897,9 @@ export function ProjectView({
                 projectMutationReadOnly ? undefined : handleForkFromMessage
               }
               forkingMessageId={forkingMessageId}
+              onForkProject={!projectMutationReadOnly && onForkProject && !projectIsDesignSystemProject ? handleForkProject : undefined}
+              forkingProjectMessageId={forkingProjectMessageId}
+              persistedUserMessageIds={persistedUserMessageIds}
               onNewConversation={handleNewConversation}
               newConversationDisabled={newConversationDisabled}
               conversations={conversations}

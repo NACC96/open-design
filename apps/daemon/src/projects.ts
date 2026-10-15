@@ -8,7 +8,7 @@
 // directory to prevent path traversal — see resolveSafe().
 
 import { constants as fsConstants, createReadStream } from 'node:fs';
-import { link, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, link, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import JSZip from 'jszip';
@@ -843,6 +843,19 @@ export async function resolveProjectFilePath(projectsRoot, projectId, name, meta
     mime: mimeFor(rel),
     kind: kindFor(rel),
   };
+}
+
+/** Copy an attachment into a fresh managed project without transforming its
+ * name or contents. Unlike artifact writes, input copies must be byte-exact. */
+export async function copyProjectFile(projectsRoot, sourceProjectId, targetProjectId, name, sourceMetadata?) {
+  if (sourceProjectId === targetProjectId) throw new Error('copy requires a new project');
+  const safeName = validateProjectPath(name);
+  const source = await resolveProjectFilePath(projectsRoot, sourceProjectId, safeName, sourceMetadata);
+  const targetDir = await ensureProject(projectsRoot, targetProjectId);
+  const target = await resolveSafeReal(targetDir, safeName);
+  await mkdir(path.dirname(target), { recursive: true });
+  await copyFile(source.filePath, target, fsConstants.COPYFILE_EXCL);
+  return { name: safeName, size: (await stat(target)).size };
 }
 
 export async function writeProjectFile(
