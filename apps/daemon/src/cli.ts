@@ -85,6 +85,7 @@ const MEDIA_GENERATE_STRING_FLAGS = new Set([
   'language',
 ]);
 const MEDIA_GENERATE_BOOLEAN_FLAGS = new Set([
+  'json',
   'help',
   'h',
   'loop',
@@ -1848,10 +1849,6 @@ async function runMediaGenerate(rawArgs) {
     process.exit(2);
   }
   const images = repeatableFlagValues(rawArgs, 'image');
-  if (flags.model.startsWith('vela/') && images.length > 5) {
-    console.error(`Vela media accepts at most 5 --image values; received ${images.length}`);
-    process.exit(2);
-  }
 
   // Long-form media prompts (detailed image/video descriptions, program-
   // generated prompts) arrive via --prompt-file <path|-> (stdin) per the CLI
@@ -1911,6 +1908,7 @@ async function runMediaGenerate(rawArgs) {
   console.error(`task ${taskId} queued (${accepted.status || 'queued'})`);
   await pollUntilDoneOrBudget(daemonUrl, taskId, 0, {
     stillRunningExitCode: 0,
+    jsonOutput: flags.json === true,
     requestHeaders: token
       ? { authorization: `Bearer ${token}` }
       : workspaceHeaders,
@@ -1970,7 +1968,7 @@ async function runMediaWait(rawArgs) {
   try {
     flags = parseFlags(rawArgs, {
       string: stringFlags,
-      boolean: new Set(['help', 'h']),
+      boolean: new Set(['help', 'h', 'json']),
     });
   } catch (err) {
     console.error(err.message);
@@ -1991,6 +1989,7 @@ async function runMediaWait(rawArgs) {
   const token = process.env.OD_TOOL_TOKEN;
   await pollUntilDoneOrBudget(daemonUrl, taskId, since, {
     totalBudgetMs: 120_000,
+    jsonOutput: flags.json === true,
     requestHeaders: token
       ? { authorization: `Bearer ${token}` }
       : workspaceHeadersFromExplicitFlags(flags) ?? {},
@@ -2064,7 +2063,7 @@ async function pollUntilDoneOrBudget(daemonUrl, taskId, sinceStart, options = {}
     if (Array.isArray(snap.progress)) {
       for (const line of snap.progress) {
         process.stderr.write(line + '\n');
-        process.stdout.write(`# ${line}\n`);
+        if (!options.jsonOutput) process.stdout.write(`# ${line}\n`);
       }
     }
     if (typeof snap.nextSince === 'number') since = snap.nextSince;
@@ -2119,7 +2118,7 @@ async function pollUntilDoneOrBudget(daemonUrl, taskId, sinceStart, options = {}
       : `exit code ${stillRunningExitCode} = still running.`;
   process.stderr.write(
     `task ${taskId} still running after ${handoff.elapsed}s. ` +
-      `Run \`"$OD_NODE_BIN" "$OD_BIN" media wait ${taskId} --since ${since}\` to continue in an agent runtime ` +
+      `Run \`"$OD_NODE_BIN" "$OD_BIN" media wait ${taskId} --since ${since}${options.jsonOutput ? ' --json' : ''}\` to continue in an agent runtime ` +
       `(${stillRunningHint}).\n`,
   );
   await flushStreamsAndExit(stillRunningExitCode);
@@ -2257,23 +2256,23 @@ Scaffold:
 
 Generate required:
   --surface  image | video | audio
-  --model    Model id from /api/media/models (e.g. gpt-image-2, seedance-2, suno-v5).
+  --model    Model id from /api/media/models (e.g. codex-gpt-image-2, hyperframes-html).
   --project  Project id. Auto-resolved from OD_PROJECT_ID when invoked by the daemon.
   --workspace <id>         Explicit Workspace id for a bound project.
   --workspace-member <id>  Explicit Workspace member id for a bound project.
 
+Codex Subscription:
+  --model codex-gpt-image-2 uses the local Codex CLI ChatGPT login (codex login).
+  No API key or Cloud account is needed. The daemon imports the generated file.
+
 Common options:
   --prompt "<text>"         Generation prompt. ElevenLabs SFX prompts must stay under 450 characters.
   --prompt-file <path|->     Read the prompt from a file, or - for stdin (for long-form prompts).
+  --json                    Keep stdout to JSON only; progress is written to stderr.
   --output <filename>       File to write under the project. Auto-named if omitted.
   --aspect 1:1|16:9|9:16|4:3|3:4
-  --quality <tier>          OpenDesign Cloud images only: published quality tier
-                            (gpt-image-2 accepts low|medium|high). Omit to let the
-                            model's own default tier decide — tiers are priced
-                            differently, so this is a billing choice.
-  --resolution <res>        OpenDesign Cloud images only: published output resolution
-                            (e.g. 1K, 2K). Must name a resolution the model publishes
-                            for --aspect. Omit to use the model's default profile.
+  --quality <tier>          Legacy provider option; unsupported by Codex Subscription.
+  --resolution <res>        Legacy provider option; unsupported by Codex Subscription.
   --length <seconds>        Video length.
   --duration <seconds>      Audio duration.
   --prompt-influence <0-1>  ElevenLabs SFX prompt adherence. Higher values follow the prompt more closely.
@@ -2286,8 +2285,7 @@ Common options:
                             meta.json / index.html. Use \`media scaffold\` to
                             create it; the daemon renders it with its pinned
                             HyperFrames runtime.
-  --image <path>            Project-relative reference image; repeat up to 5
-                            times for Vela image editing or video references.
+  --image <path>            Project-relative reference image; repeat for multiple references.
                             The first video image is the first frame; the rest
                             are references. Existing providers still receive
                             the first image through the legacy single-image field.
@@ -2305,7 +2303,7 @@ Worked generate→wait loop (POSIX bash — do NOT translate to PowerShell;
 parse JSON with python3, not jq):
 
   out=\$("\$OD_NODE_BIN" "\$OD_BIN" media generate --project "\$OD_PROJECT_ID" \\
-    --surface image --model flux-pro-ultra --prompt "..." --aspect 16:9)
+    --surface image --model codex-gpt-image-2 --prompt "..." --aspect 16:9)
   last=\$(printf '%s\\n' "\$out" | tail -1)
   task_id=\$(printf '%s\\n' "\$last" | python3 -c "import sys,json; print(json.load(sys.stdin).get('taskId',''))" 2>/dev/null)
   since=\$(printf '%s\\n' "\$last" | python3 -c "import sys,json; print(json.load(sys.stdin).get('nextSince',0))" 2>/dev/null)

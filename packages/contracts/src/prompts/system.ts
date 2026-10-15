@@ -851,7 +851,7 @@ function imageLines(
     );
     if (metadata.imageModel?.startsWith('vela/')) {
       out.push(
-        'This OpenDesign Cloud `vela/*` model must go through the OD media dispatcher. Do not invoke the `vela` CLI or the remote media API directly; the daemon owns Workspace attribution, downloads, and final project-file placement.',
+        'This legacy Cloud image id resolves to `codex-gpt-image-2` through the OD media dispatcher. Do not call provider CLIs directly; the daemon imports the image into the project.',
       );
     }
   }
@@ -881,7 +881,7 @@ function videoLines(
     );
     if (metadata.videoModel?.startsWith('vela/')) {
       out.push(
-        'This OpenDesign Cloud `vela/*` model must go through the OD media dispatcher. Do not invoke the `vela` CLI or the remote media API directly; the daemon owns Workspace attribution, polling, downloads, and final project-file placement.',
+        'This legacy Cloud video id resolves to the corresponding non-Cloud provider through the OD media dispatcher. Do not call provider CLIs directly; the daemon owns polling and final project-file placement.',
       );
     }
     if (metadata.videoModel === 'hyperframes-html') {
@@ -1011,7 +1011,7 @@ function promptTemplateReferenceLines(
       metadata.kind === 'image' &&
       !metadata.imageModel?.trim() &&
       tpl.model === 'gpt-image-2'
-        ? 'vela/gpt-image-2'
+        ? 'codex-gpt-image-2'
         : tpl.model;
     if (suggestedModel) meta.push(`suggested model: ${suggestedModel}`);
     if (tpl.aspect) meta.push(`aspect: ${tpl.aspect}`);

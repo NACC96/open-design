@@ -20,6 +20,9 @@
 //                              plus text-to-speech via /v1/audio/speech,
 //                              with auto-detection for Azure OpenAI
 //                              deployments based on the configured base URL
+//   * provider 'codex'      → local Codex CLI built-in imagegen through the
+//                              user's ChatGPT login (no API key); see
+//                              ./codex-imagegen.ts
 //   * provider 'volcengine' → Volcengine Ark async tasks API for
 //                              Doubao Seedance 2.0 (video) and Seedream
 //                              (image)
@@ -93,7 +96,7 @@ import {
   resolveHyperFramesCliPath,
   resolveHyperFramesNodeBin,
 } from './hyperframes-runtime.js';
-import { renderVelaImage, renderVelaVideo } from './vela.js';
+import { renderCodexImage } from './codex-imagegen.js';
 import {
   ensureProject,
   kindFor,
@@ -353,6 +356,12 @@ export async function generateMedia(args: {
   compositionDir?: string; image?: string; images?: string[]; onProgress?: ProgressFn; requestInit?: MediaRequestInit;
   desktopFrameRenderer?: DesktopFrameRenderer | null;
   workspaceId?: string;
+  /**
+   * The daemon's resolved data root (`RUNTIME_DATA_DIR`). Local-CLI renderers
+   * (Codex Subscription) read the user's `agentCliEnv` overrides from the
+   * app config stored there and retain subprocess evidence beneath it.
+   */
+  dataDir?: string;
   onProviderRequestSettled?: (summary: ImageGenerationRequestSummary & { providerId: string }) => void;
   /**
    * Called once with the EXACT provider bytes that were just written, while
@@ -588,6 +597,7 @@ export async function generateMedia(args: {
   let bytes: Buffer;
   let providerNote: string;
   let suggestedExt: string | undefined;
+  let cleanupProviderOutput: (() => Promise<void>) | undefined;
   let providerId = def.provider;
   // Tracks whether the bytes came from a real provider call or from the
   // stub fallback. Surfaces in the response so the CLI/agent can tell a
@@ -615,19 +625,18 @@ export async function generateMedia(args: {
       bytes = result.bytes;
       providerNote = result.providerNote;
       suggestedExt = result.suggestedExt;
-    } else if (def.provider === 'vela' && surface === 'image') {
-      const result = await renderVelaImage(ctx);
-      bytes = result.bytes;
-      providerNote = result.providerNote;
-      suggestedExt = result.suggestedExt;
-    } else if (def.provider === 'vela' && surface === 'video') {
-      const result = await renderVelaVideo({
-        ...ctx,
+    } else if (def.provider === 'codex' && surface === 'image') {
+      const result = await renderCodexImage({
+        prompt: ctx.prompt,
+        aspect: ctx.aspect,
+        imageRefs: ctx.imageRefs,
+        dataDir: args.dataDir,
         onProgress: args.onProgress,
       });
       bytes = result.bytes;
       providerNote = result.providerNote;
       suggestedExt = result.suggestedExt;
+      cleanupProviderOutput = result.cleanup;
     } else if (def.provider === 'openai' && surface === 'image') {
       const result = await renderOpenAIImage(ctx, credentials);
       bytes = result.bytes;
@@ -821,7 +830,7 @@ export async function generateMedia(args: {
     // HyperFrames is a local render, not a remote provider. Falling back
     // to a stub here hides actionable composition/preflight failures and
     // can make the agent retry or narrate a fake MP4 as success.
-    if (def.provider === 'hyperframes' || def.provider === 'vela') {
+    if (def.provider === 'hyperframes' || def.provider === 'codex') {
       throw err;
     }
     // A real provider failed (network blip, 4xx, missing key, …). We
@@ -870,6 +879,7 @@ export async function generateMedia(args: {
   const finalTarget = path.join(dir, finalOut);
   await writeFile(finalTarget, bytes);
   const st = await stat(finalTarget);
+  await cleanupProviderOutput?.();
   if (args.onBytesWritten) {
     try {
       await args.onBytesWritten({
@@ -954,7 +964,9 @@ function withMediaRequestInit(
 }
 
 const OPENAI_IMAGE_NO_CREDENTIAL_MESSAGE =
-  `no OpenAI credential — configure an API key in ${SETTINGS_MEDIA_PROVIDERS_PATH} or set OPENAI_API_KEY.`;
+  `no OpenAI credential — configure an API key in ${SETTINGS_MEDIA_PROVIDERS_PATH} or set OPENAI_API_KEY. ` +
+  'Signed in to Codex with a ChatGPT subscription? Use the codex-gpt-image-2 model instead; ' +
+  'it renders through your local Codex login and needs no OpenAI API key.';
 
 async function renderOpenAIImage(ctx: MediaContext, credentials: ProviderConfig): Promise<RenderResult> {
   if (!credentials.apiKey) {

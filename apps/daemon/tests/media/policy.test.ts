@@ -71,4 +71,31 @@ describe('media execution policy parsing', () => {
       model: 'dall-e-3',
     })).toMatchObject({ code: 'MEDIA_MODEL_DENIED' });
   });
+
+  it('treats a legacy Cloud image id and the Codex model it resolves to as one model', () => {
+    // A run created for a project saved with `vela/gpt-image-2` may dispatch
+    // either spelling, and a Codex project accepts the legacy id too.
+    expect(mediaPolicyDenial({
+      mode: 'enabled',
+      allowedModels: ['vela/gpt-image-2'],
+    }, {
+      surface: 'image',
+      model: 'codex-gpt-image-2',
+    })).toBeNull();
+    expect(mediaPolicyDenial({
+      mode: 'enabled',
+      allowedModels: ['codex-gpt-image-2'],
+    }, {
+      surface: 'image',
+      model: 'vela/gpt-image-2',
+    })).toBeNull();
+    // Canonicalising never widens the allowlist to a different model.
+    expect(mediaPolicyDenial({
+      mode: 'enabled',
+      allowedModels: ['codex-gpt-image-2'],
+    }, {
+      surface: 'image',
+      model: 'gpt-image-2',
+    })).toMatchObject({ code: 'MEDIA_MODEL_DENIED' });
+  });
 });

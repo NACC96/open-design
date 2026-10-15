@@ -269,13 +269,16 @@ describe('composeSystemPrompt', () => {
     expect(design).toContain('## Requirements Clarification Phase');
   });
 
-  it('pins Cloud nano-banana shorthand and forbids reading generated media bytes back into context', () => {
+  it('pins the nano-banana shorthand to the Nano Banana model and forbids reading generated media bytes back into context', () => {
     const prompt = composeSystemPrompt({
       skillMode: 'image',
-      metadata: { kind: 'image', imageModel: 'vela/nano-banana-2' } as any,
+      metadata: { kind: 'image', imageModel: 'gemini-3.1-flash-image-preview' } as any,
     });
 
-    expect(prompt).toContain('`nano-banana` and `nano-banana-2` mean');
+    expect(prompt).toContain(
+      '`nano-banana`, `nano-banana-2`, and\n`nano-banana-2-lite` mean `gemini-3.1-flash-image-preview`',
+    );
+    expect(prompt).not.toContain('`vela/nano-banana-2`');
     expect(prompt).toContain('Do not call `Read` on the generated image');
   });
 
@@ -436,23 +439,24 @@ describe('composeSystemPrompt', () => {
       expect(prompt).toContain('Do not output generated source code in a `<artifact type="text/html">...</artifact>` block.');
     });
 
-    it('uses Vela media defaults only for AMR and forbids direct Vela calls', () => {
+    it('uses non-Cloud media defaults and forbids direct provider calls', () => {
       const amrPrompt = composeSystemPrompt({
         agentId: 'amr',
         metadata: { kind: 'image', imageModel: 'vela/gpt-image-2' } as any,
       });
-      expect(amrPrompt).toContain('Image model: `vela/gpt-image-2`');
+      expect(amrPrompt).toContain('Image model: `codex-gpt-image-2`');
       expect(amrPrompt).toContain(
-        'Video model: `vela/doubao-seedance-2-0-260128`',
+        'Video model: `doubao-seedance-2-0-260128`',
       );
-      expect(amrPrompt).toContain('### OpenDesign Cloud media defaults');
+      expect(amrPrompt).toContain('### Media defaults');
+      expect(amrPrompt).not.toContain('### OpenDesign Cloud media defaults');
       expect(amrPrompt).not.toContain('### Run-scoped BYOK media defaults');
-      expect(amrPrompt).toContain('Never invoke the `vela` CLI directly');
-      expect(amrPrompt).toContain('trusted Workspace attribution');
+      expect(amrPrompt).toContain('Do not call Codex or another');
+      expect(amrPrompt).toContain('provider directly');
 
       const claudePrompt = composeSystemPrompt({ agentId: 'claude' });
       expect(claudePrompt).not.toContain('Image model: `vela/gpt-image-2`');
-      expect(claudePrompt).toContain('`--model flux-pro-ultra`');
+      expect(claudePrompt).toContain('`--model codex-gpt-image-2`');
     });
 
     it('keeps image completion copy concrete while retaining internal diagnostics', () => {
@@ -481,7 +485,7 @@ describe('composeSystemPrompt', () => {
       expect(prototypePrompt).toContain(
         '图片没生成出来,不是你的操作有误 —— 这次是 Open Design 自己的问题,我们已经记下了。重试一般能恢复;反复出现的话联系我们。',
       );
-      expect(prototypePrompt).toContain('IMAGE_MODEL="vela/gpt-image-2"');
+      expect(prototypePrompt).toContain('IMAGE_MODEL="codex-gpt-image-2"');
       expect(prototypePrompt).not.toContain(
         'For the best fal image model use `--model flux-pro-ultra`',
       );

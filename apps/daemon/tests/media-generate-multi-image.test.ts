@@ -84,12 +84,12 @@ describe('od media generate repeated --image', () => {
     expect(body.images).toEqual(images);
   });
 
-  it('rejects six Vela images before making an HTTP request', async () => {
+  it('passes legacy Cloud image references to the dispatcher for migration', async () => {
     const images = Array.from({ length: 6 }, (_, index) => `ref-${index}.png`);
     const result = await runCli(images);
 
-    expect(result.code).toBe(2);
-    expect(result.stderr).toContain('at most 5 --image values');
-    expect(seenBodies).toHaveLength(0);
+    expect(result.code, result.stderr).toBe(0);
+    expect(seenBodies).toHaveLength(1);
+    expect(JSON.parse(seenBodies[0]!).images).toEqual(images);
   });
 });

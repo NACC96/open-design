@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   readAliasMap,
   readMaskedConfig,
+  resolveCodexSubscriptionStatus,
   resolveModelAlias,
   resolveProviderConfig,
   seedProviderIfMissing,
@@ -170,6 +171,43 @@ describe('media-config OpenAI auth-file fallback', () => {
       source: 'codex-auth',
       apiKeyTail: '',
     });
+  });
+
+  it('uses the CLI login status without inspecting subscription credentials', async () => {
+    await writeHomeJson('.codex/auth.json', { auth_mode: 'chatgpt' });
+    const probe = vi.fn(async () => 'Logged in using ChatGPT');
+    await expect(resolveCodexSubscriptionStatus({ codexInstalled: true, probeLoginStatus: probe }))
+      .resolves.toMatchObject({ available: true, reason: 'ready' });
+    expect(probe).toHaveBeenCalledOnce();
+    await expect(resolveCodexSubscriptionStatus({
+      codexInstalled: true, probeLoginStatus: async () => 'Not logged in',
+    })).resolves.toMatchObject({ available: false, reason: 'signed-out' });
+  });
+
+  it('rejects API key logins and diagnostic text that merely mentions ChatGPT', async () => {
+    await expect(resolveCodexSubscriptionStatus({
+      codexInstalled: true, probeLoginStatus: async () => 'Logged in using an API key',
+    })).resolves.toMatchObject({ available: false, reason: 'api-key-login' });
+    await expect(resolveCodexSubscriptionStatus({
+      codexInstalled: true, probeLoginStatus: async () => 'Error: ChatGPT login failed',
+    })).resolves.toMatchObject({ available: false, reason: 'signed-out' });
+  });
+
+  it('reports missing CLI and sandbox mode without probing credentials', async () => {
+    const probe = vi.fn(async () => 'Logged in using ChatGPT');
+    const missing = await resolveCodexSubscriptionStatus({ codexInstalled: false, probeLoginStatus: probe });
+    expect(missing).toMatchObject({ available: false, reason: 'not-installed' });
+    expect(missing.message).toContain('codex login');
+    process.env.OD_SANDBOX_MODE = '1';
+    await expect(resolveCodexSubscriptionStatus({ codexInstalled: true, probeLoginStatus: probe }))
+      .resolves.toMatchObject({ available: false, reason: 'sandbox' });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the login-status probe fails', async () => {
+    await expect(resolveCodexSubscriptionStatus({
+      codexInstalled: true, probeLoginStatus: async () => { throw new Error('probe failed'); },
+    })).resolves.toMatchObject({ available: false, reason: 'signed-out' });
   });
 
   it('keeps stored provider config ahead of auth-file fallbacks', async () => {

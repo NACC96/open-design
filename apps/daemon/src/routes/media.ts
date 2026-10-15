@@ -464,6 +464,7 @@ export function registerMediaRoutes(app: Express, ctx: RegisterMediaRoutesDeps) 
         image: req.body?.image,
         images: Array.isArray(req.body?.images) ? req.body.images : undefined,
         workspaceId,
+        dataDir: RUNTIME_DATA_DIR,
         // Strong capture path (spec §5.1.1): freeze the provider's own bytes
         // the moment they land, so a later turn overwriting the same output
         // name can never rewrite this message's history. Bound to THIS run and

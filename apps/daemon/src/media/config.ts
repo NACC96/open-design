@@ -293,6 +293,67 @@ function apiKeyFromCodexAuth(data: unknown): string {
   return readNestedString(data, ['OPENAI_API_KEY']);
 }
 
+export type CodexSubscriptionReason =
+  | 'ready'
+  | 'sandbox'
+  | 'not-installed'
+  | 'signed-out'
+  | 'api-key-login';
+
+export interface CodexSubscriptionStatus {
+  available: boolean;
+  reason: CodexSubscriptionReason;
+  /** Operator-facing sentence that names the fix. */
+  message: string;
+}
+
+const CODEX_SUBSCRIPTION_MESSAGES: Record<CodexSubscriptionReason, string> = {
+  ready: 'Codex is signed in with ChatGPT.',
+  sandbox: 'Codex Subscription image generation is unavailable in sandbox mode.',
+  'not-installed':
+    'Codex CLI was not found. Install it (npm install -g @openai/codex) and run `codex login`, '
+    + 'or choose another image model.',
+  'signed-out':
+    'Codex is not signed in. Run `codex login` and choose "Sign in with ChatGPT", then try again.',
+  'api-key-login':
+    'Codex is signed in with an API key, not a ChatGPT subscription. The Codex Subscription '
+    + 'image route never spends an API key; run `codex login` and choose "Sign in with ChatGPT".',
+};
+
+function codexSubscriptionStatus(reason: CodexSubscriptionReason): CodexSubscriptionStatus {
+  return {
+    available: reason === 'ready',
+    reason,
+    message: CODEX_SUBSCRIPTION_MESSAGES[reason],
+  };
+}
+
+/** `$CODEX_HOME`, defaulting to `~/.codex`, with a leading `~/` expanded. */
+export function codexHomeFromEnv(env: NodeJS.ProcessEnv): string {
+  const raw = env.CODEX_HOME?.trim() || path.join(os.homedir(), '.codex');
+  return path.resolve(expandHomePrefix(raw));
+}
+
+/**
+ * Ask the supported CLI login-status surface. Do not read subscription tokens:
+ * Codex owns both file and keyring credentials and selects its active login.
+ */
+export async function resolveCodexSubscriptionStatus(input: {
+  codexInstalled: boolean;
+  probeLoginStatus?: () => Promise<string | null>;
+}): Promise<CodexSubscriptionStatus> {
+  if (isSandboxModeEnabled(process.env)) return codexSubscriptionStatus('sandbox');
+  if (!input.codexInstalled) return codexSubscriptionStatus('not-installed');
+  const loginStatus = await input.probeLoginStatus?.().catch(() => null);
+  if (loginStatus && /^Logged in using ChatGPT\s*$/m.test(loginStatus)) {
+    return codexSubscriptionStatus('ready');
+  }
+  if (loginStatus && /^Logged in using an? API key\b/im.test(loginStatus)) {
+    return codexSubscriptionStatus('api-key-login');
+  }
+  return codexSubscriptionStatus('signed-out');
+}
+
 async function resolveOpenAIAuthFileCredential(): Promise<OAuthCredential | null> {
   if (isSandboxModeEnabled(process.env)) return null;
   const home = os.homedir();

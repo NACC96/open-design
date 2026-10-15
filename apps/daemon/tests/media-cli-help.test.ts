@@ -57,6 +57,8 @@ function expectHelp(result: Awaited<ReturnType<typeof runMedia>>) {
   expect(result, result.stderr).toMatchObject({ code: 0, stderr: '' });
   expect(result.stdout).toContain('media generate --surface <image|video|audio> --model <id>');
   expect(result.stdout).toContain('--model    Model id from /api/media/models');
+  expect(result.stdout).toContain('codex-gpt-image-2 uses the local Codex CLI ChatGPT login');
+  expect(result.stdout).not.toContain('OpenDesign Cloud images');
 }
 
 describe('od media help', () => {
