@@ -2,7 +2,8 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'n
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer, type Socket } from 'node:net';
-import { isProcessAlive } from '@open-design/platform';
+import { isProcessAlive, waitForProcessExit } from '@open-design/platform';
+import { createInterface } from 'node:readline';
 import { mediaFailureNextStep } from '@open-design/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -42,6 +43,7 @@ type FakeCodexOptions = {
   changeStoreAfterRead?: string;
   authRouting?: Record<string, unknown>;
   controlPort?: number;
+  probeControlPhase?: 'config' | 'login';
 };
 
 /**
@@ -66,6 +68,7 @@ async function installFakeCodex(root: string, options: FakeCodexOptions = {}): P
     changeStoreAfterRead: options.changeStoreAfterRead,
     authRouting: options.authRouting,
     controlPort: options.controlPort,
+    probeControlPhase: options.probeControlPhase,
     png: PNG_BASE64,
     outputFileName: options.outputFileName === undefined
       ? 'exec-0d4c4e7e-6a0e-4bb4-9a37-1b2f3c4d5e6f.png'
@@ -87,6 +90,27 @@ import path from 'node:path';
 
 const config = ${JSON.stringify(config)};
 const args = process.argv.slice(2);
+async function holdReadinessProbe() {
+  // The descendant acknowledges readiness; the wrapper holds TERM until release. The test
+  // controls exit over the socket, exposing an early-settlement bug without sleep.
+  const descendant = spawn(process.execPath, ['-e',
+    "process.on('message', () => process.exit(0)); process.send('ready'); setInterval(() => {}, 1000);"
+  ], {stdio: ['ignore', 'ignore', 'ignore', 'ipc']});
+  await new Promise(resolve => descendant.once('message', resolve));
+  const control = createConnection(config.controlPort, '127.0.0.1');
+  const exited = new Promise(resolve => descendant.once('exit', () => {
+    control.write(JSON.stringify({event: 'descendant-exit'}) + '\\n');
+    resolve();
+  }));
+  const onTerm = () => control.write(JSON.stringify({event: 'term'}) + '\\n');
+  process.on('SIGTERM', onTerm);
+  control.once('connect', () => control.write(JSON.stringify({pid: process.pid, descendantPid: descendant.pid}) + '\\n'));
+  await new Promise(resolve => control.once('data', resolve));
+  if (descendant.exitCode === null && descendant.signalCode === null) descendant.send('finish');
+  await exited;
+  process.off('SIGTERM', onTerm);
+  control.end();
+}
 const configFile = path.join(process.env.CODEX_HOME, 'config.toml');
 let userConfig = '';
 try { userConfig = readFileSync(configFile, 'utf8'); } catch {}
@@ -108,12 +132,13 @@ const account = config.credentials
 appendFileSync(config.invocationsFile, JSON.stringify({args, store, account}) + '\\n');
 if (args[0] === 'app-server') {
   const lines = createInterface({input: process.stdin});
-  lines.on('line', line => {
+  lines.on('line', async line => {
     const request = JSON.parse(line);
     if (request.method === 'initialize') {
       process.stdout.write(JSON.stringify({id: request.id, result: {userAgent: 'fake-codex'}}) + '\\n');
     }
     if (request.method === 'config/read') {
+      if (config.probeControlPhase === 'config') await holdReadinessProbe();
       const response = config.configReadError
         ? {error: {code: -32603, message: 'fake config failure'}}
         : {result: {config: {...config.authRouting, cli_auth_credentials_store: configuredStore ?? null, features: {...config.authRouting?.features, ...(configuredSecrets ? {secret_auth_storage: configuredSecrets === 'true'} : {})}, unrelated_secret: 'MUST_NOT_COPY_CONFIG'}, origins: {}}};
@@ -124,6 +149,7 @@ if (args[0] === 'app-server') {
     }
   });
 } else if (args[0] === 'login' && args[1] === 'status') {
+  if (config.probeControlPhase === 'login') await holdReadinessProbe();
   process.stdout.write((account ? config.loginStatus : 'Not logged in') + '\\n');
   process.exitCode = account ? config.loginStatusExit : 1;
 } else {
@@ -150,10 +176,10 @@ process.stdin.on('end', async () => {
   process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: config.threadId }) + '\\n');
   process.stdout.write(JSON.stringify({ type: 'turn.started' }) + '\\n');
   process.stdout.write(config.extraOutput);
-  if (config.controlPort) {
+  if (config.controlPort && !config.probeControlPhase) {
     const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
     const control = createConnection(config.controlPort, '127.0.0.1');
-    control.once('connect', () => control.write(JSON.stringify({pid: process.pid, descendantPid: descendant.pid})));
+    control.once('connect', () => control.write(JSON.stringify({pid: process.pid, descendantPid: descendant.pid}) + '\\n'));
     await new Promise(resolve => control.once('data', resolve));
     const exited = new Promise(resolve => descendant.once('exit', resolve));
     descendant.kill('SIGTERM');
@@ -190,16 +216,31 @@ async function renderControl() {
   type ActiveFixture = { socket: Socket; pid: number; descendantPid: number };
   let resolve!: (active: ActiveFixture) => void;
   const ready = new Promise<ActiveFixture>(done => { resolve = done; });
+  let onTerm!: () => void;
+  const terminationRequested = new Promise<void>(resolve => { onTerm = resolve; });
+  let onDescendantExit!: () => void;
+  const descendantExited = new Promise<void>(resolve => { onDescendantExit = resolve; });
   const sockets = new Set<Socket>();
   const server = createServer(socket => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
-    socket.once('data', data => resolve({socket, ...JSON.parse(data.toString())}));
+    createInterface({input: socket}).on('line', line => {
+      const event = JSON.parse(line);
+      if (event.event === 'term') onTerm();
+      else if (event.event === 'descendant-exit') onDescendantExit();
+      else resolve({socket, ...event});
+    });
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   return {
     port: (server.address() as {port: number}).port,
     ready,
+    terminationRequested,
+    waitForDescendantExit: () => new Promise<void>((resolve, reject) => {
+      // Failure deadline for a real process boundary, not a readiness sleep.
+      const timer = setTimeout(() => reject(new Error('descendant was not reaped')), 5_000);
+      void descendantExited.then(() => { clearTimeout(timer); resolve(); });
+    }),
     close: () => {
       for (const socket of sockets) socket.destroy();
       return new Promise<void>(resolve => server.close(() => resolve()));
@@ -259,6 +300,60 @@ describe('Codex Subscription image provider', () => {
     controller.abort(new Error('daemon shutdown'));
     await expect(generate({ signal: controller.signal })).rejects.toThrow('daemon shutdown');
     expect(await fake.invocations()).toEqual([]);
+  });
+
+  it.each(['config', 'login'] as const)('awaits %s probe closure and its owned descendant during shutdown', async probeControlPhase => {
+    const control = await renderControl();
+    const service = createCodexImageService();
+    const fake = await installFakeCodex(root, {controlPort: control.port, probeControlPhase});
+    process.env.CODEX_BIN = fake.bin;
+    const rendering = generate({codexImageRenderer: service.render}).then(() => null, error => error as Error);
+    const active = await control.ready;
+    let shutdownReturned = false;
+    const shuttingDown = service.shutdownActive().then(() => { shutdownReturned = true; });
+    try {
+      await control.terminationRequested;
+      expect(isProcessAlive(active.pid)).toBe(true);
+      expect(shutdownReturned, 'shutdown must wait for close, not the abort callback').toBe(false);
+      await control.waitForDescendantExit();
+      expect(isProcessAlive(active.descendantPid)).toBe(false);
+      expect(shutdownReturned).toBe(false);
+      active.socket.write('finish');
+      await shuttingDown;
+      expect((await rendering)?.message).toContain('daemon shutdown');
+      expect(isProcessAlive(active.pid)).toBe(false);
+      expect(isProcessAlive(active.descendantPid)).toBe(false);
+      expect(await fake.calls()).toEqual([]);
+    } finally {
+      active.socket.write('finish');
+      await shuttingDown;
+      await rendering;
+      await Promise.all([waitForProcessExit(active.pid), waitForProcessExit(active.descendantPid)]);
+      await control.close();
+    }
+  });
+
+  it.each(['config', 'login'] as const)('allows the %s query to complete normally before generation', async probeControlPhase => {
+    const control = await renderControl();
+    const service = createCodexImageService();
+    const fake = await installFakeCodex(root, {controlPort: control.port, probeControlPhase});
+    process.env.CODEX_BIN = fake.bin;
+    const rendering = generate({codexImageRenderer: service.render});
+    const active = await control.ready;
+    try {
+      expect(await fake.calls()).toEqual([]);
+      active.socket.write('finish');
+      const result = await rendering;
+      expect(result.providerId).toBe('codex');
+      expect(isProcessAlive(active.pid)).toBe(false);
+      expect(isProcessAlive(active.descendantPid)).toBe(false);
+      expect(await fake.calls()).toHaveLength(1);
+    } finally {
+      active.socket.write('finish');
+      await service.shutdownActive();
+      await rendering.catch(() => {});
+      await control.close();
+    }
   });
 
   it('reaps the render and its descendant on explicit shutdown before resolving', async () => {

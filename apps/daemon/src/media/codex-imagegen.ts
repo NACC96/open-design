@@ -7,19 +7,11 @@
 // that write succeeds. Read-only subprocess evidence stays under the resolved
 // daemon data root. Quiet/slow renders are never killed by a wall-clock timer.
 
-import { execFile, spawn } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
-import {
-  captureProcessSnapshot,
-  captureProcessSnapshotsByPids,
-  createCommandInvocation,
-  selectOwnedProcessTree,
-  stopProcesses,
-  terminateProcessGroup,
-} from '@open-design/platform';
+import { spawnOwnedCodexProcess } from './codex-process.js';
 import {
   applyAgentLaunchEnv,
   getAgentDef,
@@ -126,7 +118,6 @@ function runCodex(
   options: { cwd: string; stdin: string; runDir: string; signal?: AbortSignal | undefined },
 ): Promise<ProcessResult> {
   options.signal?.throwIfAborted();
-  const invocation = createCommandInvocation({ command: launch.command, args, env: launch.env });
   const eventsPath = path.join(options.runDir, 'events.jsonl');
   const stderrPath = path.join(options.runDir, 'stderr.txt');
   const metadataPath = path.join(options.runDir, 'metadata.json');
@@ -142,32 +133,12 @@ function runCodex(
   writeFileSync(stderrPath, '', { mode: 0o600 });
   saveMetadata();
   return new Promise((resolve, reject) => {
-    const child = spawn(invocation.command, invocation.args, {
-      cwd: options.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false, windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-      detached: process.platform !== 'win32',
+    const { child, completion } = spawnOwnedCodexProcess({
+      command: launch.command, args, env: launch.env, cwd: options.cwd, signal: options.signal,
     });
     let stdout = '';
     let stderr = '';
     let evidenceError: unknown;
-    let closed = false;
-    let termination: Promise<unknown> | undefined;
-    const identity = process.platform === 'win32' && child.pid
-      ? captureProcessSnapshotsByPids([child.pid]).catch(() => [])
-      : Promise.resolve([]);
-    const onAbort = () => {
-      if (closed || termination || !child.pid) return;
-      // Only an explicit lifecycle abort reaches these existing OS primitives.
-      // The grace windows apply to shutdown, never to generation duration.
-      termination = process.platform !== 'win32'
-        ? terminateProcessGroup(child.pid, { termGraceMs: 3_000, killGraceMs: 3_000 })
-        : identity.then(async known => {
-          const current = await captureProcessSnapshot();
-          const owned = selectOwnedProcessTree(known, current);
-          return stopProcesses(owned.map(entry => entry.pid), { termGraceMs: 3_000, killGraceMs: 3_000 });
-        });
-      void termination.catch(error => { evidenceError = error; });
-    };
     // A disk error must not abandon or interrupt a still-running Codex process.
     const record = (write: () => void) => { try { write(); } catch (err) { evidenceError = err; } };
     metadata.pid = child.pid ?? null;
@@ -197,25 +168,17 @@ function runCodex(
     child.stdin.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code !== 'EPIPE') evidenceError = err;
     });
-    child.once('error', (err) => { evidenceError = err; });
-    child.once('close', (code, signal) => {
-      closed = true;
-      options.signal?.removeEventListener('abort', onAbort);
+    const finish = (error?: unknown) => {
       lines.close();
       metadata.endedAt = new Date().toISOString();
-      metadata.exitCode = code;
-      metadata.signal = signal;
+      metadata.exitCode = child.exitCode;
+      metadata.signal = child.signalCode;
       record(saveMetadata);
-      const finish = () => {
-        if (options.signal?.aborted) reject(options.signal.reason);
-        else if (evidenceError) reject(evidenceError);
-        else resolve({ code, signal, stdout, stderr, threadId: metadata.threadId });
-      };
-      // A closed wrapper is insufficient: await the captured group's teardown.
-      void (termination ?? Promise.resolve()).then(finish, error => { evidenceError = error; finish(); });
-    });
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    if (options.signal?.aborted) onAbort();
+      if (error != null) reject(error);
+      else if (evidenceError) reject(evidenceError);
+      else resolve({ code: child.exitCode, signal: child.signalCode, stdout, stderr, threadId: metadata.threadId });
+    };
+    void completion.then(() => finish(), finish);
     child.stdin.end(options.signal?.aborted ? '' : options.stdin);
   });
 }
@@ -225,18 +188,27 @@ async function probeCodexLoginStatus(
   authConfig: CodexAuthConfig,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  const invocation = createCommandInvocation({
+  const { child, completion } = spawnOwnedCodexProcess({
     command: launch.command,
     args: ['login', 'status', ...codexAuthConfigArgs(authConfig)],
     env: launch.env,
+    signal,
+    query: { timeoutMs: LOGIN_STATUS_TIMEOUT_MS, maxOutputBytes: OUTPUT_TAIL_CHARS },
   });
-  return new Promise((resolve) => {
-    // This bounded status command does not start a generation or agent turn.
-    execFile(invocation.command, invocation.args, {
-      env: launch.env, timeout: LOGIN_STATUS_TIMEOUT_MS, maxBuffer: OUTPUT_TAIL_CHARS, signal,
-      windowsHide: true, windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    }, (error, stdout, stderr) => resolve(error ? null : `${stdout}\n${stderr}`));
-  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => { stdout = `${stdout}${chunk}`.slice(-OUTPUT_TAIL_CHARS); });
+  child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-OUTPUT_TAIL_CHARS); });
+  child.stdin.end();
+  try {
+    const exit = await completion;
+    return exit.code === 0 ? `${stdout}\n${stderr}` : null;
+  } catch {
+    signal?.throwIfAborted();
+    return null;
+  }
 }
 
 /**

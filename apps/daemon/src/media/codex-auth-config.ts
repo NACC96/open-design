@@ -1,6 +1,5 @@
-import { execFile } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { createCommandInvocation } from '@open-design/platform';
+import { spawnOwnedCodexProcess } from './codex-process.js';
 
 export type CodexCredentialStore = 'file' | 'keyring' | 'auto' | 'ephemeral';
 export interface CodexAuthConfig {
@@ -105,31 +104,25 @@ export function readCodexAuthConfig(input: {
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal | undefined;
 }): Promise<CodexAuthConfig> {
-  const invocation = createCommandInvocation({
+  const { child, completion } = spawnOwnedCodexProcess({
     ...input,
     args: ['app-server', '--stdio', '--disable', 'hooks', '--disable', 'plugins', '--disable', 'apps'],
+    query: { timeoutMs: CONFIG_READ_TIMEOUT_MS, maxOutputBytes: 1_048_576 },
   });
   return new Promise((resolve, reject) => {
     let authConfig: CodexAuthConfig | undefined;
     let failed = false;
     let phase: 'initialize' | 'config' | 'done' = 'initialize';
-    const child = execFile(invocation.command, invocation.args, {
-      env: input.env,
-      signal: input.signal,
-      timeout: CONFIG_READ_TIMEOUT_MS,
-      maxBuffer: 1_048_576,
-      windowsHide: true,
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    }, (error) => {
+    const settle = (error: boolean) => {
       lines.close();
       if (input.signal?.aborted) {
         reject(input.signal.reason);
       } else if (error || failed || !authConfig) {
-        // Do not expose stdout/stderr: config/read can contain unrelated
-        // private settings. Only allowlisted auth-routing settings leave here.
+        // Never expose query stdout/stderr: they can contain private settings.
         reject(new Error('Could not resolve the Codex credential store. Check your Codex CLI configuration and try again.'));
       } else resolve(authConfig);
-    });
+    };
+    void completion.then(exit => settle(exit.code !== 0), () => settle(true));
     const lines = createInterface({ input: child.stdout! });
     const finish = () => { phase = 'done'; child.stdin?.end(); };
     const send = (message: Record<string, unknown>) => {
