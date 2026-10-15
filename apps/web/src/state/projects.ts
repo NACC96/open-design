@@ -892,7 +892,9 @@ export async function forkProject(
     const body = await response.json().catch(() => ({}));
     throw new ProjectForkRequestError(body.error?.code ?? 'FORK_FAILED', body.error?.details?.attachmentName);
   }
-  return response.json() as Promise<ForkProjectResponse>;
+  const created = await response.json() as ForkProjectResponse;
+  markProjectCreatedByViewer(created.project.id, workspaceContext ?? null);
+  return created;
 }
 
 export async function duplicateProject(
