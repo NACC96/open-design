@@ -12,7 +12,14 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
-import { createCommandInvocation } from '@open-design/platform';
+import {
+  captureProcessSnapshot,
+  captureProcessSnapshotsByPids,
+  createCommandInvocation,
+  selectOwnedProcessTree,
+  stopProcesses,
+  terminateProcessGroup,
+} from '@open-design/platform';
 import {
   applyAgentLaunchEnv,
   getAgentDef,
@@ -64,6 +71,8 @@ export interface CodexImageRenderInput {
   /** Resolved daemon data root, for app-config `agentCliEnv.codex` overrides. */
   dataDir: string | undefined;
   onProgress?: ((message: string) => void) | undefined;
+  /** Explicit owner shutdown only; never a generation timeout. */
+  signal?: AbortSignal | undefined;
 }
 
 export interface CodexImageRenderResult {
@@ -114,14 +123,16 @@ interface ProcessResult {
 function runCodex(
   launch: CodexLaunch & { command: string },
   args: string[],
-  options: { cwd: string; stdin: string; runDir: string },
+  options: { cwd: string; stdin: string; runDir: string; signal?: AbortSignal | undefined },
 ): Promise<ProcessResult> {
+  options.signal?.throwIfAborted();
   const invocation = createCommandInvocation({ command: launch.command, args, env: launch.env });
   const eventsPath = path.join(options.runDir, 'events.jsonl');
   const stderrPath = path.join(options.runDir, 'stderr.txt');
   const metadataPath = path.join(options.runDir, 'metadata.json');
   const metadata = {
-    command: invocation.command, args: redactCodexAuthArgs(invocation.args), cwd: options.cwd,
+    // Redact logical argv before platform wrappers combine it into a command string.
+    command: launch.command, args: redactCodexAuthArgs(args), cwd: options.cwd,
     startedAt: new Date().toISOString(), pid: null as number | null,
     threadId: null as string | null, endedAt: null as string | null,
     exitCode: null as number | null, signal: null as NodeJS.Signals | null,
@@ -134,10 +145,29 @@ function runCodex(
     const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'],
       shell: false, windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      detached: process.platform !== 'win32',
     });
     let stdout = '';
     let stderr = '';
     let evidenceError: unknown;
+    let closed = false;
+    let termination: Promise<unknown> | undefined;
+    const identity = process.platform === 'win32' && child.pid
+      ? captureProcessSnapshotsByPids([child.pid]).catch(() => [])
+      : Promise.resolve([]);
+    const onAbort = () => {
+      if (closed || termination || !child.pid) return;
+      // Only an explicit lifecycle abort reaches these existing OS primitives.
+      // The grace windows apply to shutdown, never to generation duration.
+      termination = process.platform !== 'win32'
+        ? terminateProcessGroup(child.pid, { termGraceMs: 3_000, killGraceMs: 3_000 })
+        : identity.then(async known => {
+          const current = await captureProcessSnapshot();
+          const owned = selectOwnedProcessTree(known, current);
+          return stopProcesses(owned.map(entry => entry.pid), { termGraceMs: 3_000, killGraceMs: 3_000 });
+        });
+      void termination.catch(error => { evidenceError = error; });
+    };
     // A disk error must not abandon or interrupt a still-running Codex process.
     const record = (write: () => void) => { try { write(); } catch (err) { evidenceError = err; } };
     metadata.pid = child.pid ?? null;
@@ -169,21 +199,31 @@ function runCodex(
     });
     child.once('error', (err) => { evidenceError = err; });
     child.once('close', (code, signal) => {
+      closed = true;
+      options.signal?.removeEventListener('abort', onAbort);
       lines.close();
       metadata.endedAt = new Date().toISOString();
       metadata.exitCode = code;
       metadata.signal = signal;
       record(saveMetadata);
-      if (evidenceError) reject(evidenceError);
-      else resolve({ code, signal, stdout, stderr, threadId: metadata.threadId });
+      const finish = () => {
+        if (options.signal?.aborted) reject(options.signal.reason);
+        else if (evidenceError) reject(evidenceError);
+        else resolve({ code, signal, stdout, stderr, threadId: metadata.threadId });
+      };
+      // A closed wrapper is insufficient: await the captured group's teardown.
+      void (termination ?? Promise.resolve()).then(finish, error => { evidenceError = error; finish(); });
     });
-    child.stdin.end(options.stdin);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+    child.stdin.end(options.signal?.aborted ? '' : options.stdin);
   });
 }
 
 async function probeCodexLoginStatus(
   launch: CodexLaunch & { command: string },
   authConfig: CodexAuthConfig,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   const invocation = createCommandInvocation({
     command: launch.command,
@@ -193,7 +233,7 @@ async function probeCodexLoginStatus(
   return new Promise((resolve) => {
     // This bounded status command does not start a generation or agent turn.
     execFile(invocation.command, invocation.args, {
-      env: launch.env, timeout: LOGIN_STATUS_TIMEOUT_MS, maxBuffer: OUTPUT_TAIL_CHARS,
+      env: launch.env, timeout: LOGIN_STATUS_TIMEOUT_MS, maxBuffer: OUTPUT_TAIL_CHARS, signal,
       windowsHide: true, windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     }, (error, stdout, stderr) => resolve(error ? null : `${stdout}\n${stderr}`));
   });
@@ -204,7 +244,7 @@ async function probeCodexLoginStatus(
  * ChatGPT. Checked before every render so a missing CLI or login fails with a
  * sentence that names the fix instead of a spawn error.
  */
-async function codexReadiness(launch: CodexLaunch): Promise<{
+async function codexReadiness(launch: CodexLaunch, signal?: AbortSignal): Promise<{
   status: CodexSubscriptionStatus;
   authConfig?: CodexAuthConfig;
 }> {
@@ -212,12 +252,12 @@ async function codexReadiness(launch: CodexLaunch): Promise<{
   if (!command || isSandboxModeEnabled(process.env)) {
     return { status: await resolveCodexSubscriptionStatus({ codexInstalled: Boolean(command) }) };
   }
-  const authConfig = await readCodexAuthConfig({ ...launch, command });
+  const authConfig = await readCodexAuthConfig({ ...launch, command, signal });
   return {
     authConfig,
     status: await resolveCodexSubscriptionStatus({
       codexInstalled: true,
-      probeLoginStatus: () => probeCodexLoginStatus({ ...launch, command }, authConfig),
+      probeLoginStatus: () => probeCodexLoginStatus({ ...launch, command }, authConfig, signal),
     }),
   };
 }
@@ -368,6 +408,7 @@ async function findGeneratedImage(threadDir: string): Promise<{ file: string; ex
 }
 
 export async function renderCodexImage(input: CodexImageRenderInput): Promise<CodexImageRenderResult> {
+  input.signal?.throwIfAborted();
   // Applies after the shared dispatcher resolves/deduplicates references, and
   // before config probing or a subscription turn can start. Codex 0.162.1's
   // built-in image tool limits both reference paths and attached images to five.
@@ -379,7 +420,8 @@ export async function renderCodexImage(input: CodexImageRenderInput): Promise<Co
   }
   const launch = await resolveCodexLaunch(input.dataDir);
   const command = launch.command;
-  const { status, authConfig } = await codexReadiness(launch);
+  const { status, authConfig } = await codexReadiness(launch, input.signal);
+  input.signal?.throwIfAborted();
   if (!status.available || !command) {
     throw new CodexImagegenError(status.message, {
       code: status.reason === 'not-installed' || status.reason === 'sandbox'
@@ -410,6 +452,7 @@ export async function renderCodexImage(input: CodexImageRenderInput): Promise<Co
           referenceCount: input.imageRefs.length,
         }),
         runDir,
+        signal: input.signal,
       },
     );
     const threadId = result.threadId;

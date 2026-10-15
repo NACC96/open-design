@@ -103,6 +103,7 @@ export function redactCodexAuthArgs(args: readonly string[]): string[] {
 export function readCodexAuthConfig(input: {
   command: string;
   env: NodeJS.ProcessEnv;
+  signal?: AbortSignal | undefined;
 }): Promise<CodexAuthConfig> {
   const invocation = createCommandInvocation({
     ...input,
@@ -114,13 +115,16 @@ export function readCodexAuthConfig(input: {
     let phase: 'initialize' | 'config' | 'done' = 'initialize';
     const child = execFile(invocation.command, invocation.args, {
       env: input.env,
+      signal: input.signal,
       timeout: CONFIG_READ_TIMEOUT_MS,
       maxBuffer: 1_048_576,
       windowsHide: true,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     }, (error) => {
       lines.close();
-      if (error || failed || !authConfig) {
+      if (input.signal?.aborted) {
+        reject(input.signal.reason);
+      } else if (error || failed || !authConfig) {
         // Do not expose stdout/stderr: config/read can contain unrelated
         // private settings. Only allowlisted auth-routing settings leave here.
         reject(new Error('Could not resolve the Codex credential store. Check your Codex CLI configuration and try again.'));

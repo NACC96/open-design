@@ -944,6 +944,7 @@ import { registerStrategyRolloutRoutes } from './routes/strategy-rollout.js';
 import { registerTerminalRoutes } from './routes/terminal.js';
 import { registerBrowserSessionRoutes } from './routes/browser-sessions.js';
 import { createTerminalService } from './terminals.js';
+import { createCodexImageService } from './media/codex-image-service.js';
 import { createBrowserSessionService } from './browser-sessions.js';
 import { registerSocialShareRoutes } from './routes/social-share.js';
 import { registerOpenDesignPublicMetadataRoutes } from './routes/open-design-public-metadata.js';
@@ -8013,8 +8014,9 @@ export async function startServer({
     taskObservationRollout.diagnostic(),
   );
 
-  // Interactive Terminal sessions (node-pty). In-memory, process-local, and
-  // killed on daemon shutdown — see shutdownDaemonRuns below.
+  // Process-local services own their children until completion or explicit
+  // daemon shutdown — see shutdownDaemonRuns below.
+  const codexImageService = createCodexImageService();
   const terminalService = createTerminalService();
   const browserSessionService = createBrowserSessionService();
 
@@ -8532,7 +8534,7 @@ export async function startServer({
     AUDIO_DURATIONS_SEC,
     readMaskedConfig,
     writeConfig,
-    generateMedia: (args) => generateMedia({ ...args, desktopFrameRenderer }),
+    generateMedia: (args) => generateMedia({ ...args, desktopFrameRenderer, codexImageRenderer: codexImageService.render }),
     mediaTasks: mediaTaskStore.mediaTasks,
     createMediaTask: mediaTaskStore.createMediaTask,
     persistMediaTask: mediaTaskStore.persistMediaTask,
@@ -18157,7 +18159,10 @@ export async function startServer({
       amrTerminalReportDelivery.stop();
       clearTerminalTelemetryFallbackTimers();
       const shutdownGraceMs = resolveChatRunShutdownGraceMs();
-      await design.runs.shutdownActive({ graceMs: shutdownGraceMs });
+      await Promise.all([
+        design.runs.shutdownActive({ graceMs: shutdownGraceMs }),
+        codexImageService.shutdownActive(),
+      ]);
       // Cleanup runs independently of user terminal classification. Give
       // confirmed closed writers at most three additional seconds at shutdown.
       const cleanupDrain = await codexThreadCleanupOwner.drain(shutdownGraceMs);

@@ -1,10 +1,13 @@
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createServer, type Socket } from 'node:net';
+import { isProcessAlive } from '@open-design/platform';
 import { mediaFailureNextStep } from '@open-design/contracts';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { generateMedia } from '../../src/media/index.js';
+import { createCodexImageService } from '../../src/media/codex-image-service.js';
 import {
   codexImagegenArgs,
   codexImagegenPrompt,
@@ -38,6 +41,7 @@ type FakeCodexOptions = {
   configReadError?: boolean;
   changeStoreAfterRead?: string;
   authRouting?: Record<string, unknown>;
+  controlPort?: number;
 };
 
 /**
@@ -61,6 +65,7 @@ async function installFakeCodex(root: string, options: FakeCodexOptions = {}): P
     configReadError: options.configReadError,
     changeStoreAfterRead: options.changeStoreAfterRead,
     authRouting: options.authRouting,
+    controlPort: options.controlPort,
     png: PNG_BASE64,
     outputFileName: options.outputFileName === undefined
       ? 'exec-0d4c4e7e-6a0e-4bb4-9a37-1b2f3c4d5e6f.png'
@@ -76,6 +81,8 @@ async function installFakeCodex(root: string, options: FakeCodexOptions = {}): P
   await writeFile(bin, `#!/usr/bin/env node
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { createConnection } from 'node:net';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 
 const config = ${JSON.stringify(config)};
@@ -143,6 +150,16 @@ process.stdin.on('end', async () => {
   process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: config.threadId }) + '\\n');
   process.stdout.write(JSON.stringify({ type: 'turn.started' }) + '\\n');
   process.stdout.write(config.extraOutput);
+  if (config.controlPort) {
+    const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'ignore'});
+    const control = createConnection(config.controlPort, '127.0.0.1');
+    control.once('connect', () => control.write(JSON.stringify({pid: process.pid, descendantPid: descendant.pid})));
+    await new Promise(resolve => control.once('data', resolve));
+    const exited = new Promise(resolve => descendant.once('exit', resolve));
+    descendant.kill('SIGTERM');
+    await exited;
+    control.end();
+  }
   if (config.outputFileName) {
     const dir = path.join(process.env.CODEX_HOME, 'generated_images', config.threadId);
     mkdirSync(dir, { recursive: true });
@@ -165,6 +182,27 @@ process.stdin.on('end', async () => {
     calls: async () => {
       const raw = await readFile(callsFile, 'utf8').catch(() => '');
       return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    },
+  };
+}
+
+async function renderControl() {
+  type ActiveFixture = { socket: Socket; pid: number; descendantPid: number };
+  let resolve!: (active: ActiveFixture) => void;
+  const ready = new Promise<ActiveFixture>(done => { resolve = done; });
+  const sockets = new Set<Socket>();
+  const server = createServer(socket => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    socket.once('data', data => resolve({socket, ...JSON.parse(data.toString())}));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (server.address() as {port: number}).port,
+    ready,
+    close: () => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise<void>(resolve => server.close(() => resolve()));
     },
   };
 }
@@ -192,6 +230,7 @@ describe('Codex Subscription image provider', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     for (const key of ENV_KEYS) {
       if (originalEnv[key] == null) delete process.env[key];
       else process.env[key] = originalEnv[key];
@@ -212,6 +251,70 @@ describe('Codex Subscription image provider', () => {
       ...overrides,
     });
   }
+
+  it('does not start Codex when the owning daemon has already shut down', async () => {
+    const fake = await installFakeCodex(root);
+    process.env.CODEX_BIN = fake.bin;
+    const controller = new AbortController();
+    controller.abort(new Error('daemon shutdown'));
+    await expect(generate({ signal: controller.signal })).rejects.toThrow('daemon shutdown');
+    expect(await fake.invocations()).toEqual([]);
+  });
+
+  it('reaps the render and its descendant on explicit shutdown before resolving', async () => {
+    const control = await renderControl();
+    const service = createCodexImageService();
+    const fake = await installFakeCodex(root, { controlPort: control.port });
+    process.env.CODEX_BIN = fake.bin;
+    const rendering = generate({ codexImageRenderer: service.render }).then(() => null, error => error as Error);
+    try {
+      const active = await control.ready;
+      expect(isProcessAlive(active.pid)).toBe(true);
+      expect(isProcessAlive(active.descendantPid)).toBe(true);
+      await service.shutdownActive();
+      expect((await rendering)?.message).toContain('daemon shutdown');
+      expect(isProcessAlive(active.pid)).toBe(false);
+      expect(isProcessAlive(active.descendantPid)).toBe(false);
+      await service.shutdownActive();
+      const before = (await fake.invocations()).length;
+      await expect(generate({ codexImageRenderer: service.render })).rejects.toThrow('daemon shutdown');
+      expect(await fake.invocations()).toHaveLength(before);
+    } finally {
+      await service.shutdownActive();
+      await rendering;
+      await control.close();
+    }
+  });
+
+  it('keeps a quiet render alive until it finishes normally and releases its ownership', async () => {
+    const control = await renderControl();
+    const service = createCodexImageService();
+    process.env.CODEX_BIN = (await installFakeCodex(root, { controlPort: control.port })).bin;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const rendering = generate({ codexImageRenderer: service.render });
+    try {
+      const active = await control.ready;
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(isProcessAlive(active.pid)).toBe(true);
+      vi.useRealTimers();
+      active.socket.write('finish');
+      const result = await rendering;
+      expect(result.providerId).toBe('codex');
+      expect(result.usedStubFallback).toBe(false);
+      expect(isProcessAlive(active.pid)).toBe(false);
+      expect(isProcessAlive(active.descendantPid)).toBe(false);
+      await service.shutdownActive();
+      const runsDir = path.join(root, 'data-root', 'media', 'codex-runs');
+      const [run] = await readdir(runsDir);
+      const metadata = JSON.parse(await readFile(path.join(runsDir, run!, 'metadata.json'), 'utf8'));
+      expect(metadata).toMatchObject({exitCode: 0, signal: null});
+    } finally {
+      vi.useRealTimers();
+      await service.shutdownActive();
+      await rendering.catch(() => {});
+      await control.close();
+    }
+  });
 
   it('renders codex-gpt-image-2 through a headless, isolated codex exec and imports the image', async () => {
     await writeCodexAuth(codexHome, { auth_mode: 'chatgpt', OPENAI_API_KEY: null });
@@ -324,7 +427,7 @@ describe('Codex Subscription image provider', () => {
     const images = Array.from({ length: 5 }, (_, i) => `ref-${i}.png`);
     await Promise.all(images.map(name => writeFile(path.join(projectDir, name), Buffer.from(PNG_BASE64, 'base64'))));
 
-    await generate({ image: images[0], images: [...images, images[0]!] });
+    await generate({ image: images[0]!, images: [...images, images[0]!] });
     const [call] = await fake.calls();
     expect(call!.args.filter(arg => arg === '--image')).toHaveLength(5);
   });

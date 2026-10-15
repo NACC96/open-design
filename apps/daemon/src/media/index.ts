@@ -356,6 +356,8 @@ export async function generateMedia(args: {
   compositionDir?: string; image?: string; images?: string[]; onProgress?: ProgressFn; requestInit?: MediaRequestInit;
   desktopFrameRenderer?: DesktopFrameRenderer | null;
   workspaceId?: string;
+  signal?: AbortSignal;
+  codexImageRenderer?: typeof renderCodexImage;
   /**
    * The daemon's resolved data root (`RUNTIME_DATA_DIR`). Local-CLI renderers
    * (Codex Subscription) read the user's `agentCliEnv` overrides from the
@@ -626,11 +628,12 @@ export async function generateMedia(args: {
       providerNote = result.providerNote;
       suggestedExt = result.suggestedExt;
     } else if (def.provider === 'codex' && surface === 'image') {
-      const result = await renderCodexImage({
+      const result = await (args.codexImageRenderer ?? renderCodexImage)({
         prompt: ctx.prompt,
         aspect: ctx.aspect,
         imageRefs: ctx.imageRefs,
         dataDir: args.dataDir,
+        signal: args.signal,
         onProgress: args.onProgress,
       });
       bytes = result.bytes;
