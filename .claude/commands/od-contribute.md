@@ -9,6 +9,8 @@ User input (may be empty): `$ARGUMENTS`
 
 ## What to do right now
 
+First apply [the root repository instructions](../../AGENTS.md#fork-only-workflow). This flow publishes to `nexu-io/open-design`; a generic bug report or automatic skill match in Noah's fork does not authorize that destination. Proceed only for explicitly requested upstream work, and retain the final exact-body preview and confirmation for every PR, issue, or issue comment.
+
 1. **Load the skill** by invoking the `od-contribute` skill via the Skill tool. The skill owns the full execution playbook — do not reimplement it inline.
 
 2. **Pass the user input forward**:

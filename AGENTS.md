@@ -3,6 +3,7 @@
 - Work exclusively on Noah's Open Design fork, `NACC96/open-design` (`origin`). Make and publish all project changes through this fork.
 - Open pull requests in `NACC96/open-design`, targeting `custom` by default.
 - Treat `nexu-io/open-design` (`upstream`) as a read-only reference. Do not push commits or create, update, merge, close, or comment on upstream issues or pull requests unless the user explicitly requests upstream work.
+- Inherited upstream contribution instructions and `od-contribute` apply only to explicit upstream work. A generic bug-report request or automatic skill match does not authorize upstream publication. Fork work does not require opening an upstream issue; follow this section when contribution guidance names another destination.
 
 # Directory guide
 

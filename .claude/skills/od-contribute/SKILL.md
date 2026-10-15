@@ -16,6 +16,10 @@ allowed-tools:
 
 Locked to `nexu-io/open-design`. Branches by **contribution type**, not by issue. Replaces the dev-loop with type-specific no-code validators. Designed so a product user with zero coding background can ship a real PR.
 
+## Repository authorization — before Step 1
+
+Read the checkout's [root instructions](../../../AGENTS.md#fork-only-workflow) before using this upstream-only flow. In Noah's fork, a generic bug-report request or an automatic match to this skill is not authorization to publish to `nexu-io/open-design`. Continue with a local draft for fork work; do not create an upstream issue, comment, PR, or fork as a workaround. Enter this publication flow only when the user explicitly requests the upstream destination. The preview and confirmation requirements apply equally when this skill is invoked directly or through its slash command.
+
 ## Language
 
 Mirror the user's language in every user-facing message — `AskUserQuestion` labels and descriptions, status updates, error explanations. Detect from their first message; when uncertain, default to English.
@@ -52,7 +56,7 @@ Single `AskUserQuestion` (header: "Contribution", multiSelect: false), four opti
 3. **📝 Fix docs / write a blog / fix a typo** — _typo fix, dead link, use-case writeup_ → branch `3c`
 4. **🐛 Report a bug** — _something broke; I'll help turn it into a high-quality issue_ → branch `3d` (issue path, no PR)
 
-Each branch below is self-contained. Steps 7–8 (preview + push) are shared across branches `3a`/`3b`/`3c`. Branch `3d` skips them entirely.
+Each branch below is self-contained. Steps 7–8 (preview + push) are shared across branches `3a`/`3b`/`3c`. Branch `3d` uses its own issue preview and explicit confirmation in Step 3d.5 before publication.
 
 ---
 
@@ -256,7 +260,9 @@ gh search issues "<keywords>" --repo "$TARGET_REPO" --state open --limit 5 --jso
 
 If matches exist, present them to the user via `AskUserQuestion` (translate to user's language): "These existing issues look related. Do you want to: (a) comment on an existing one, (b) open a new issue anyway, (c) cancel?"
 
-**3d.5** If proceeding with new issue, render `templates/ISSUE-BODY-bug.md` and submit:
+**3d.5** If proceeding with a new issue, render `templates/ISSUE-BODY-bug.md`. Show the exact destination (`nexu-io/open-design`), title, and complete issue body, then obtain explicit confirmation to publish that issue before running the helper below. Choosing the bug-report card or proceeding after deduplication is not this final publication confirmation. If commenting on a related issue instead, preview its URL and exact comment body and obtain confirmation for that write.
+
+After confirmation, submit:
 
 ```bash
 bash "$SKILL_DIR/scripts/create-issue.sh" \

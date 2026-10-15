@@ -1,5 +1,7 @@
 # Contributing to OpenDesign
 
+> **Fork checkout:** [AGENTS.md → Fork-only workflow](AGENTS.md#fork-only-workflow) governs work in `NACC96/open-design`. The upstream links and issue-first steps below describe explicitly requested contributions to `nexu-io/open-design`; they are not prerequisites for fork changes. A general bug-report request does not authorize posting upstream.
+
 Thanks for thinking about contributing. OD is small on purpose — most of the value lives in **files** (skills, design systems, prompt fragments) rather than framework code. That means the highest-leverage contributions are usually one folder, one Markdown file, or one PR-sized adapter.
 
 This guide tells you exactly where to look for each type of contribution and what bar a PR has to clear before we merge it.
