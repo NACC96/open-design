@@ -413,7 +413,7 @@ describe('App project list across a workspace switch', () => {
         draftsReads += 1;
         return draftsReads === 1 ? [WORKSPACE_A_PROJECT] : refreshedDrafts.promise;
       }
-      if (options?.workspaceView === 'all') return [WORKSPACE_B_PROJECT];
+      if (options?.workspaceView === 'recent') return [WORKSPACE_B_PROJECT];
       return [];
     });
     window.history.replaceState(null, '', '/drafts');
@@ -422,7 +422,7 @@ describe('App project list across a workspace switch', () => {
     await waitFor(() =>
       expect(screen.getByTestId(`entry-project-${WORKSPACE_A_PROJECT.id}`)).toBeTruthy(),
     );
-    act(() => navigate({ kind: 'home', view: 'all-projects' }));
+    act(() => navigate({ kind: 'home', view: 'home' }));
     await waitFor(() =>
       expect(screen.getByTestId(`entry-project-${WORKSPACE_B_PROJECT.id}`)).toBeTruthy(),
     );
@@ -463,7 +463,7 @@ describe('App project list across a workspace switch', () => {
         if (draftsReads === 1) return [WORKSPACE_A_PROJECT];
         throw new Error('draft refresh unavailable');
       }
-      if (options?.workspaceView === 'all') return [WORKSPACE_B_PROJECT];
+      if (options?.workspaceView === 'recent') return [WORKSPACE_B_PROJECT];
       return [];
     });
     window.history.replaceState(null, '', '/drafts');
@@ -472,7 +472,7 @@ describe('App project list across a workspace switch', () => {
     await waitFor(() =>
       expect(screen.getByTestId(`entry-project-${WORKSPACE_A_PROJECT.id}`)).toBeTruthy(),
     );
-    act(() => navigate({ kind: 'home', view: 'all-projects' }));
+    act(() => navigate({ kind: 'home', view: 'home' }));
     await waitFor(() =>
       expect(screen.getByTestId(`entry-project-${WORKSPACE_B_PROJECT.id}`)).toBeTruthy(),
     );

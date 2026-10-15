@@ -28,39 +28,10 @@ function context(overrides: Partial<WorkspaceCollabContext> = {}): WorkspaceColl
 }
 
 describe('canPublishPublicFile', () => {
-  it('allows a team workspace with a resolved member', () => {
-    expect(canPublishPublicFile(context())).toBe(true);
-  });
-
-  // A personal workspace publishes under its OWN id. B's control-key auth path
-  // stopped refusing non-team callers and now mints a principal whose teamId is
-  // the workspace id, so the hub scopes a personal workspace as a partition of
-  // one. The daemon's `publicFilePrincipal` applies the same rule; this is the
-  // client half of that pair.
-  it('allows a personal workspace with a resolved member', () => {
-    expect(canPublishPublicFile(context({ workspaceType: 'personal' }))).toBe(true);
-  });
-
-  it('allows a personal workspace that carries no teamId at all', () => {
-    const personal = context({ workspaceType: 'personal' });
-    delete personal.teamId;
-    expect(canPublishPublicFile(personal)).toBe(true);
-  });
-
-  // …but the gate is widened, not removed. Without a workspace there is no id
-  // to publish under, and the daemon answers 409 WORKSPACE_IDENTITY_REQUIRED.
-  it('refuses a signed-out / unresolved context', () => {
-    expect(canPublishPublicFile(null)).toBe(false);
-    expect(canPublishPublicFile(undefined)).toBe(false);
-  });
-
-  it('refuses a context whose member id has not resolved yet', () => {
-    expect(canPublishPublicFile(context({ workspaceMemberId: '' }))).toBe(false);
-    expect(canPublishPublicFile(context({ workspaceType: 'personal', workspaceMemberId: '' }))).toBe(false);
-  });
-
-  it('refuses a context whose workspace id has not resolved yet', () => {
-    expect(canPublishPublicFile(context({ workspaceId: '' }))).toBe(false);
+  it('never offers Cloud publishing, including with a lingering signed-in session', () => {
+    for (const workspace of [context(), context({ workspaceType: 'personal' }), null, undefined]) {
+      expect(canPublishPublicFile(workspace)).toBe(false);
+    }
   });
 });
 

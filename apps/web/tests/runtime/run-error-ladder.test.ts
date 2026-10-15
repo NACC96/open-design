@@ -73,7 +73,7 @@ describe('主按钮阶梯(§6.Z)', () => {
   // 这一档的按钮就是那颗 Cloud CTA;OPEND-2772 之后它长在报错卡自己的主位上
   // (`cloudSwitchCta`),不再是卡下面另起的第二张卡。
   it('第 3 档:本地走不通时主按钮是切换到 Cloud', () => {
-    expect(primaryActionForFailure({ localDeadEnd: true })).toBe('switch-to-cloud');
+    expect(primaryActionForFailure({ localDeadEnd: true })).toBe('contact-support');
   });
 
   // 档 4:上面都没有 —— 〔联系支持〕从常驻次级**提为主**(E6)。
@@ -142,7 +142,7 @@ describe('S19 进程崩了 / 异常退出(每月 20,868 次、占失败 16.3%、
     // 阶梯本身仍然把 S19 判成「暂时性」——〔重试〕还是这一档自己的答案。
     // 变的是主按钮位:OPEND-2772 之后所有 BYOK / 本地 CLI 的卡都带 Cloud CTA,
     // S19(每月 20,868 次,第二大桶)以前一颗都没有,正是「铺到所有报错」要补的那批。
-    expect(ui.cloudSwitchCta).toBe(true);
+    expect(ui.cloudSwitchCta).toBe(false);
   });
 
   // S19 对每个 agent 都一样(AMR 也会崩)。今天 AMR 分支的 catch-all 会把它

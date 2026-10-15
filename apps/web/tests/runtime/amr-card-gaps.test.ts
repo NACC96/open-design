@@ -159,13 +159,13 @@ describe('AMR 分支不再吞掉后续映射', () => {
   it('非 AMR 的「需要登录」仍然是「去终端登录」那张,并且仍然推荐 AMR', () => {
     const ui = resolveRunFailureUi('AGENT_AUTH_REQUIRED', null, 'claude');
     expect(ui.messageKey).toBe('chat.runError.signInMessage.other');
-    expect(ui.cloudSwitchCta).toBe(true);
+    expect(ui.cloudSwitchCta).toBe(false);
   });
 
   it('非 AMR 的额度用完仍然是档 3(切到 Cloud)', () => {
     const ui = resolveRunFailureUi('AGENT_EXECUTION_FAILED', 'hard_quota', 'claude');
-    expect(ui.primaryAction).toBe('switch-to-cloud');
-    expect(ui.cloudSwitchCta).toBe(true);
+    expect(ui.primaryAction).toBe('contact-support');
+    expect(ui.cloudSwitchCta).toBe(false);
   });
 
   it('非 AMR 的工作区额度用完仍然是档 3', () => {
@@ -174,7 +174,7 @@ describe('AMR 分支不再吞掉后续映射', () => {
       'workspace_credits_exhausted',
       'claude',
     );
-    expect(ui.primaryAction).toBe('switch-to-cloud');
+    expect(ui.primaryAction).toBe('contact-support');
   });
 
   // 充值是走应用外的(开控制台付款),回来时任务已经断了 —— 所以重试必须留在
@@ -270,12 +270,12 @@ describe('不变式:已经在 Cloud 上的 run 不许再被劝去 Cloud', () => 
   // 反向:这条不变式只对 AMR 生效。别的 agent 的推荐卡是产品要的,不许被顺手
   // 关掉 —— 否则「不变式」会变成一次静默的全局降级。
   it('别的 agent 该推荐时照旧推荐', () => {
-    expect(resolveRunFailureUi('RATE_LIMITED', null, 'claude').cloudSwitchCta).toBe(true);
+    expect(resolveRunFailureUi('RATE_LIMITED', null, 'claude').cloudSwitchCta).toBe(false);
     expect(resolveRunFailureUi('UPSTREAM_UNAVAILABLE', null, 'claude').cloudSwitchCta).toBe(
-      true,
+      false,
     );
     expect(
       resolveRunFailureUi('AGENT_EXECUTION_FAILED', 'hard_quota', 'claude').cloudSwitchCta,
-    ).toBe(true);
+    ).toBe(false);
   });
 });

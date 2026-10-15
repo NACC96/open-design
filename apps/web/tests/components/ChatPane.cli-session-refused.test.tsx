@@ -167,14 +167,12 @@ describe('ChatPane — ACP CLI session refusal card', () => {
     expect(container.querySelector('.run-error__diagnostic')).toBeNull();
   });
 
-  it('offers Cloud switching for the refused CLI run, without a second Retry action', () => {
-    const message = refusedMessage();
+  it('offers local retry without a Cloud action for a refused CLI session', () => {
     const onSwitchToAmrAndRetry = vi.fn();
-    renderChat(message, onSwitchToAmrAndRetry);
-
-    fireEvent.click(screen.getByRole('button', { name: 'chat.amrCard.switchCta' }));
-    expect(onSwitchToAmrAndRetry).toHaveBeenCalledExactlyOnceWith(message);
-    expect(screen.queryByRole('button', { name: 'promptTemplates.retry' })).toBeNull();
+    renderChat(refusedMessage(), onSwitchToAmrAndRetry);
+    expect(screen.queryByRole('button', { name: 'chat.amrCard.switchCta' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'promptTemplates.retry' }));
+    expect(onSwitchToAmrAndRetry).not.toHaveBeenCalled();
   });
 
   // The daemon may ship extra structured facts on the same event (it already

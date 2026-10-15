@@ -46,62 +46,6 @@ describe('DeepSeek V4 Flash workbench campaign entry', () => {
     expect(campaignModalSource).not.toContain('styles.goWelcome');
   });
 
-  it('uses the top-right campaign slot only for the active DeepSeek audience', () => {
-    expect(entryShellSource).toContain('<WorkbenchCampaignBadge');
-    expect(workbenchCampaignBadgeSource).toContain('deepseek-campaign-pricing-badge');
-    expect(workbenchCampaignBadgeSource).not.toContain("kind === 'go'");
-    expect(workbenchCampaignBadgeSource).not.toContain('goPlanCopy.workbenchBadge');
-    expect(workbenchCampaignBadgeSource).toContain("t('campaign.deepseekV4Flash.workbenchBadge')");
-    expect(workbenchCampaignBadgeSource).toContain("t('campaign.deepseekV4Flash.workbenchBadgeAria')");
-    expect(entryShellSource).not.toContain("subscriptionAudience === 'unpaid'");
-    expect(entryShellSource).not.toContain('goPlanCampaignVisibility.visible');
-    expect(entryShellSource).toContain("deepSeekV4FlashCampaignAudience === 'unknown'");
-  });
-
-  it('keeps the built-in campaign entry visible across entry tabs and project detail', () => {
-    // The DeepSeek pill is product chrome and rides every surface. The CMS
-    // touchpoints beside it are home placements and are asserted separately
-    // below; that is why this slot may no longer open on `amrLoggedIn` alone.
-    expect(entryShellSource).toMatch(
-      /topRightSlot=\{\s*topRightCampaignAudience\s*\|\|\s*\(homeCampaignHostsVisible && amrLoggedIn === true\)\s*\?\s*\(/,
-    );
-    expect(entryShellSource).toMatch(
-      /topRightSlot=\{[\s\S]*?\{\s*topRightCampaignAudience\s*\?\s*\([\s\S]*?<WorkbenchCampaignBadge[\s\S]*?audience=\{topRightCampaignAudience\}[\s\S]*?page="home"/,
-    );
-    expect(entryShellSource).not.toMatch(
-      /topRightSlot=\{\s*view === 'home'/,
-    );
-    expect(entryShellSource).not.toMatch(
-      /topRightSlot=\{\s*homeCampaignHostsVisible\s*&&/,
-    );
-    expect(entryNavRailSource).toMatch(
-      /export function WorkspaceTopRightAccountCluster[\s\S]*?leadingSlot=\{\s*campaignAudience\s*\?\s*\(/,
-    );
-    expect(entryNavRailSource).toMatch(
-      /export function WorkspaceTopRightAccountCluster[\s\S]*?leadingSlot=\{[\s\S]*?<WorkbenchCampaignBadge[\s\S]*?audience=\{campaignAudience\}[\s\S]*?page="project"/,
-    );
-    expect(appSource).toMatch(
-      /<WorkspaceTopRightAccountCluster[\s\S]*?amrLoggedIn=\{amrLoginStatus\?\.loggedIn \?\? null\}[\s\S]*?metricsConsent=\{config\.telemetry\?\.metrics === true\}/,
-    );
-  });
-
-  it('keeps every CMS touchpoint host on the home view', () => {
-    // `opend.home.*` is the only placement family this app authorizes, so the
-    // account badge, the hover entry and the modals are home hosts. The
-    // workbench corner carries none of them.
-    expect(entryShellSource).toContain("const homeCampaignHostsVisible = view === 'home';");
-    expect(entryShellSource).toMatch(
-      /homeCampaignHostsVisible\s*&&\s*canRenderProductionCampaignBadge\(amrLoggedIn === true, amrAccountId\)\s*\?\s*<ProductionCampaignBadge authenticated sessionSubject=\{amrAccountId\}/,
-    );
-    expect(entryShellSource).toMatch(
-      /homeCampaignHostsVisible\s*\?\s*\(\s*<ProductionCampaignHover\s+authenticated=\{amrLoggedIn === true\}\s+sessionSubject=\{amrAccountId\}/,
-    );
-    expect(entryNavRailSource).not.toContain('ProductionCampaignBadge');
-    expect(appSource).toMatch(
-      /\{route\.kind === 'home' && route\.view === 'home' && \([\s\S]*?<TestCampaignModal[\s\S]*?<ProductionCampaignModal/,
-    );
-  });
-
   it('sends both Go and paid DeepSeek badges to public Pricing', () => {
     expect(entryShellSource).not.toContain('amrPlansUrlForWorkspace');
     expect(workbenchCampaignBadgeSource).toContain('goPlanPricingUrl(locale)');
@@ -137,18 +81,6 @@ describe('DeepSeek V4 Flash workbench campaign entry', () => {
     expect(modelSwitcherSource).toContain('campaignNeedsUpgrade');
   });
 
-  it('mounts the campaign modal gated on the active home view only', () => {
-    // EntryShell hides inactive entry views with display:none while the
-    // Dialog portals to document.body, so visibility CSS alone cannot stop
-    // the modal from interrupting projects/tasks/... routes. The home-view
-    // activity signal must reach the modal as a prop.
-    expect(entryShellSource).toContain("isActive={view === 'home'}");
-    expect(homeViewSource).toMatch(
-      /<DeepSeekV4FlashCampaign[\s\S]*?active=\{isActive\}/,
-    );
-    expect(campaignModalSource).toMatch(/if \(!active\)/);
-  });
-
   it('re-arms the unseen modal when the user returns to the home view', () => {
     // Leaving home closes the dialog WITHOUT marking it seen; the open
     // effect must therefore re-run on the activity flip, not only on the
@@ -157,23 +89,6 @@ describe('DeepSeek V4 Flash workbench campaign entry', () => {
     expect(campaignModalSource).toMatch(
       /if \(!active \|\| !modalOpen \|\| audience === 'unknown'/,
     );
-  });
-
-  it('wires the paid use_now CTA to the real agent/model switch (D5)', () => {
-    // The modal's callback must reach EntryShell's persistence pair — the
-    // same onAgentChange/onAgentModelChange the InlineModelSwitcher writes
-    // through — so 立即使用 changes the workbench, not just the UI.
-    // Mode must flip to daemon first: a paid BYOK user (mode === 'api')
-    // would otherwise keep the BYOK provider after agent/model ids change.
-    expect(entryShellSource).toContain('applyDeepSeekCampaignModel');
-    expect(entryShellSource).toMatch(
-      /onModeChange\('daemon'\);\s*onAgentChange\(agentId\);\s*onAgentModelChange\(agentId, \{ model: modelId \}\)/,
-    );
-    expect(entryShellSource).toMatch(
-      /\[onAgentChange, onAgentModelChange, onModeChange\]/,
-    );
-    expect(homeViewSource).toContain('onUseCampaignModel={onDeepSeekV4FlashCampaignUseNow}');
-    expect(campaignModalSource).toContain("onUseCampaignModel?.('amr', campaign.modelId)");
   });
 
   it('keeps every campaign surface free of URL-parameter reads (product decision)', () => {

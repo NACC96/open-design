@@ -24,18 +24,19 @@ describe('availableVisibleAgentCount', () => {
   // could see — "3 available" sitting above a two-row list.
   it('excludes agents that are hidden from the picker', () => {
     const agents = [
-      agent({ id: 'amr', available: true }),
+      agent({ id: 'claude', available: true }),
       agent({ id: 'deepseek', available: true }),
       agent({ id: 'byok-opencode', available: true }),
+      agent({ id: 'amr', available: true }),
     ];
 
-    expect(agents.filter((a) => a.available).length).toBe(3);
+    expect(agents.filter((a) => a.available).length).toBe(4);
     expect(availableVisibleAgentCount(agents)).toBe(2);
   });
 
   it('ignores unavailable agents', () => {
     const agents = [
-      agent({ id: 'amr', available: true }),
+      agent({ id: 'claude', available: true }),
       agent({ id: 'codex', available: false }),
     ];
 
@@ -53,9 +54,11 @@ describe('availableVisibleAgentCount', () => {
 });
 
 describe('isVisibleLocalCliAgent', () => {
-  it('hides only the internal BYOK OpenCode runtime', () => {
+  it('hides the retired API-key and Cloud runtimes (Local AI only fork)', () => {
     expect(isVisibleLocalCliAgent({ id: 'byok-opencode' })).toBe(false);
+    expect(isVisibleLocalCliAgent({ id: 'amr' })).toBe(false);
     expect(isVisibleLocalCliAgent({ id: 'opencode' })).toBe(true);
+    expect(isVisibleLocalCliAgent({ id: 'claude' })).toBe(true);
   });
 });
 

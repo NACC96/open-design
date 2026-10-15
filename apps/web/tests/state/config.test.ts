@@ -175,7 +175,7 @@ describe('syncConfigToDaemon', () => {
     // A false `onboardingCompleted` is omitted rather than sent: the sync only
     // ratchets it upward, so a stale local `false` can never re-arm first-run
     // onboarding on the daemon. Resetting is opt-in via `allowOnboardingReset`.
-    expect(body).not.toHaveProperty('onboardingCompleted');
+    expect(body.onboardingCompleted).toBe(true);
     expect(body).toMatchObject({
       agentId: DEFAULT_CONFIG.agentId,
       agentModels: DEFAULT_CONFIG.agentModels,
@@ -289,7 +289,7 @@ describe('mergeDaemonConfig', () => {
     expect(merged.onboardingCompleted).toBe(true);
   });
 
-  it('lets an explicit reset clear onboarding once the local copy is already false', () => {
+  it('completes onboarding even when both stored copies are false', () => {
     // Settings → "run setup again" writes false to both stores at once, so by
     // the time the next merge runs the local copy is false too. The ratchet
     // must not resurrect completion in that state.
@@ -298,7 +298,7 @@ describe('mergeDaemonConfig', () => {
       { onboardingCompleted: false },
     );
 
-    expect(merged.onboardingCompleted).toBe(false);
+    expect(merged.onboardingCompleted).toBe(true);
   });
 
   it('adopts a daemon completion for a local copy that never had one', () => {
@@ -1028,7 +1028,7 @@ describe('loadConfig', () => {
 
     const config = loadConfig();
 
-    expect(config.mode).toBe('api');
+    expect(config.mode).toBe('daemon');
     expect(config.baseUrl).toBe('https://api.deepseek.com');
     expect(config.model).toBe('deepseek-v4-flash');
     expect(config.apiProtocol).toBe('openai');
@@ -1139,7 +1139,7 @@ describe('loadConfig', () => {
       // the unsupported protocol was still downgraded ...
       expect(config.apiProtocol).toBe(DEFAULT_CONFIG.apiProtocol);
       // ... but the rest of the user's config was NOT discarded to defaults
-      expect(config.mode).toBe('api');
+      expect(config.mode).toBe('daemon');
     } finally {
       setItem.mockRestore();
     }
@@ -1345,7 +1345,7 @@ describe('loadConfig', () => {
 
     const config = loadConfig();
 
-    expect(config.mode).toBe('api');
+    expect(config.mode).toBe('daemon');
     expect(config.baseUrl).toBe('https://ollama.com');
     expect(config.model).toBe('gpt-oss:120b');
     expect(config.apiProtocol).toBe('ollama');
@@ -1423,7 +1423,7 @@ describe('loadConfig', () => {
 
     const config = loadConfig();
 
-    expect(config.mode).toBe('api');
+    expect(config.mode).toBe('daemon');
     expect(config.apiKey).toBe('sk-test');
     expect(config.baseUrl).toBe('https://[broken-ipv6');
     expect(config.model).toBe('custom-model');
@@ -1608,5 +1608,28 @@ describe('saveConfig', () => {
       claude: { apiKeyOverride: true },
       codex: { apiKeyOverride: true },
     });
+  });
+});
+
+
+describe('Local AI configuration migration', () => {
+  it.each(['amr', 'byok-opencode'])('migrates a saved %s selection without discarding unrelated settings', (agentId) => {
+    localStorage.setItem('open-design:config', JSON.stringify({
+      ...DEFAULT_CONFIG, mode: 'api', agentId, onboardingCompleted: false,
+      model: 'old-provider-model', customInstructions: 'Keep my instructions',
+      agentModels: { claude: { model: 'claude-fable-5' } },
+    }));
+    const config = loadConfig();
+    expect(config).toMatchObject({
+      mode: 'daemon', agentId: null, onboardingCompleted: true,
+      model: 'old-provider-model', customInstructions: 'Keep my instructions',
+      agentModels: { claude: { model: 'claude-fable-5' } },
+    });
+    expect(JSON.parse(localStorage.getItem('open-design:config')!)).toMatchObject({ mode: 'daemon', onboardingCompleted: true });
+  });
+
+  it('preserves a selected local agent and its model even when the old mode was API', () => {
+    const config = mergeDaemonConfig({ ...DEFAULT_CONFIG, mode: 'api', agentId: 'opencode', onboardingCompleted: false }, null);
+    expect(config).toMatchObject({ mode: 'daemon', agentId: 'opencode', onboardingCompleted: true });
   });
 });

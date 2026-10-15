@@ -100,6 +100,16 @@ describe('resolveAgentResumeContext', () => {
     });
   }
 
+  it.each(['amr', 'byok-opencode'])('preserves a legacy %s session while starting a local session', (agentId) => {
+    const db = seed();
+    seedMessage(db, 'asst-1', 'assistant');
+    upsertAgentSession(db, { conversationId: 'conv-1', agentId, sessionId: 'legacy-session', lastMessageId: 'asst-1' });
+    const result = resolveAgentResumeContext(db, { conversationId: 'conv-1', agentId: 'claude' });
+    expect(result.isResuming).toBe(false);
+    expect(result.resumeSessionId).toBeNull();
+    expect(getAgentSessionRecord(db, 'conv-1', agentId)?.sessionId).toBe('legacy-session');
+  });
+
   it('creates a new session (minted uuid, not resuming) when none stored', () => {
     const db = seed();
     const ctx = resolveAgentResumeContext(db, { conversationId: 'conv-1', agentId: 'claude' });

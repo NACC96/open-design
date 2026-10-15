@@ -113,6 +113,15 @@ async function evaluateExpression(
 }
 
 describe('packaged Home first-run readiness', () => {
+  it('instruments a fresh Home directly without onboarding', async () => {
+    const fixture = renderFixture();
+    const result = await evaluateExpression(packagedHomeFirstRunExpression(), fixture);
+    expect(result).toMatchObject({
+      instrumented: true,
+      readiness: { pathname: '/', onboardingVisible: false, composerVisible: true },
+    });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

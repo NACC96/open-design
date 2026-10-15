@@ -386,13 +386,14 @@ const PLUGIN_LIST_BOOLEAN_FLAGS = new Set([
   'bundled', 'no-bundled',
 ]);
 
+// Fork (Local AI only): `od amr` (Open Design Cloud sign-in), `od collab` and
+// `od workspace` (Cloud team workspaces) are intentionally not registered. Their
+// handlers stay below, unreachable, so upstream syncs keep merging cleanly.
 const SUBCOMMAND_MAP = {
   agent: runAgent,
   artifacts: runArtifacts,
   media: runMedia,
   mcp: runMcp,
-  amr: runAmr,
-  collab: runCollab,
   'message-center': runMessageCenter,
   research: runResearch,
   plugin: runPlugin,
@@ -403,7 +404,6 @@ const SUBCOMMAND_MAP = {
   brands: runBrand,
   project: runProject,
   strategy: runStrategy,
-  workspace: runWorkspace,
   automation: runAutomation,
   automations: runAutomation,
   memory: runMemory,
@@ -1002,10 +1002,6 @@ function printRootHelp() {
   od message-center <list|read|read-all> [args]
       Read and acknowledge message-center inbox items through the same
       daemon endpoints the bell UI uses.
-
-  od amr <login|status> [args]
-      Start Vela browser sign-in or inspect the current Vela account through
-      the local OpenDesign daemon.
 
   od memory tree <list|view|edit|move> [args]
       Inspect and edit the memory tree that is injected into agent prompts.

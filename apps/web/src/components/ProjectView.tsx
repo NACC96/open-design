@@ -13789,6 +13789,7 @@ export function ProjectView({
                   ? messages.find((message) => message.id === sourceAssistantMessageId)
                   : undefined;
                 const strategyTaskExecutionId = await resolveQuestionFormStrategyTaskExecutionId({
+                  sourceAgentId: sourceAssistant?.agentId,
                   ...(sourceAssistant?.strategyTaskExecutionId
                     ? { persistedTaskExecutionId: sourceAssistant.strategyTaskExecutionId }
                     : {}),

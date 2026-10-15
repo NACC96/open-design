@@ -1,3 +1,5 @@
+import { isVisibleLocalCliAgent } from '../utils/visibleAgents';
+import { enforceLocalAiOnlyConfig } from '../state/local-ai-only';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { getResolvedDeviceId } from '../analytics/client';
@@ -94,8 +96,8 @@ interface Props {
  * active agent's model and reasoning choices close to the composer.
  */
 export function AvatarMenu({
-  config,
-  agents,
+  config: savedConfig,
+  agents: detectedAgents,
   onAgentChange,
   onAgentModelChange,
   onApiModelChange,
@@ -107,6 +109,8 @@ export function AvatarMenu({
   projectWorkspaceScope,
   openSignal,
 }: Props) {
+  const config = useMemo(() => enforceLocalAiOnlyConfig(savedConfig), [savedConfig]);
+  const agents = useMemo(() => detectedAgents.filter(isVisibleLocalCliAgent), [detectedAgents]);
   const t = useT();
   const analytics = useAnalytics();
   // recvqfYKutwWlQ: gate the AMR upgrade entry on billing permission below,

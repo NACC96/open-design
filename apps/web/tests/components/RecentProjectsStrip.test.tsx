@@ -1179,7 +1179,7 @@ describe('recvq5fpqrXzV1 — per-card move-to-team menu item', () => {
     expect(screen.queryByRole('menuitem', { name: /Move to team space|Move out of team space/i })).toBeNull();
   });
 
-  it('shows the move-to-team item when collaboration is available', () => {
+  it('hides the move-to-team item even for legacy collaboration props', () => {
     render(
       <RecentProjectsStrip
         projects={[project({ id: 'project-1', name: 'Draft' })]}
@@ -1191,7 +1191,7 @@ describe('recvq5fpqrXzV1 — per-card move-to-team menu item', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
-    expect(screen.getByRole('menuitem', { name: /Move to team space/i })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: /Move to team space/i })).toBeNull();
   });
 });
 
@@ -1357,7 +1357,7 @@ describe('team-shared project with unresolved owner identity', () => {
 
     expect((screen.getByRole('menuitem', { name: 'Rename' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole('menuitem', { name: /Move out of team space/i })).toBeNull();
-    expect((screen.getByRole('menuitem', { name: /In team space/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('menuitem', { name: /In team space/i })).toBeNull();
     expect((screen.getByRole('menuitem', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

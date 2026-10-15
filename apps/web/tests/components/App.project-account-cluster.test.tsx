@@ -328,34 +328,11 @@ describe('project route — floating account cluster', () => {
     resetWorkspaceDirectoryCache();
   });
 
-  it('keeps the credits pill — but not the account menu — mounted on an open project', async () => {
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+  it('keeps Cloud account and credits controls absent on an existing workspace-bound project', async () => {
     render(<App />);
-
-    // The credits pill rides the shared chrome portal; it appears once the
-    // workspace context read resolves.
-    const credits = await screen.findByTestId('entry-top-right-credits');
-    expect(credits.closest('.entry-top-right-cluster')).not.toBeNull();
-
-    // The account module now lives at the bottom of the entry rail, and this
-    // route has no rail — so it is deliberately absent rather than relocated.
+    await screen.findByText('Project view');
+    expect(screen.queryByTestId('entry-top-right-credits')).toBeNull();
     expect(screen.queryByTestId('entry-nav-account')).toBeNull();
-
-    // Balance still comes from THIS route's workspace, not the shell's. Since
-    // design PR #8364 the pill carries only the plan wordmark, so the amount is
-    // read off the billing card the pill opens on hover.
-    fireEvent.pointerOver(credits.closest('.entry-top-right-credits-anchor') as HTMLElement);
-    const creditsCard = await waitFor(() => {
-      const el = document.querySelector('.entry-nav-rail__menu-credits');
-      if (!el) throw new Error('credits card not open');
-      return el;
-    });
-    expect(creditsCard.textContent).toContain('$12.34');
-    expect(creditsCard.textContent).not.toContain('98.76');
-
-    fireEvent.click(screen.getByTestId('entry-top-right-credits'));
-    expect(open).toHaveBeenCalledOnce();
-    expect(open.mock.calls[0]?.[0]).toContain('/dashboard?workspaceId=ws-project');
   });
 
   it.each([
@@ -398,7 +375,7 @@ describe('project route — floating account cluster', () => {
     view.rerender(<App />);
 
     expect(await screen.findByText('Project view')).toBeTruthy();
-    expect(screen.getByTestId('project-workspace-recovery-tip')).toBeTruthy();
+    expect(screen.queryByTestId('project-workspace-recovery-tip')).toBeNull();
     expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
     expect(projectViewMountedMock).toHaveBeenCalledTimes(1);
     expect(projectViewUnmountedMock).not.toHaveBeenCalled();

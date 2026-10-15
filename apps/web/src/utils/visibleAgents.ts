@@ -1,6 +1,9 @@
 import type { AgentInfo } from '../types';
+import { RETIRED_AGENT_IDS } from '../state/local-ai-only';
 
-const HIDDEN_LOCAL_CLI_AGENT_IDS = new Set(['byok-opencode']);
+// Fork (Local AI only): the hidden API-key runtime (`byok-opencode`) and the
+// Open Design Cloud runtime (`amr`) are never offered as local CLIs.
+const HIDDEN_LOCAL_CLI_AGENT_IDS: ReadonlySet<string> = RETIRED_AGENT_IDS;
 
 export function isVisibleLocalCliAgent(agent: Pick<AgentInfo, 'id'>): boolean {
   return !HIDDEN_LOCAL_CLI_AGENT_IDS.has(agent.id);

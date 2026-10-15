@@ -59,7 +59,6 @@ import { getResolvedDeviceId } from '../analytics/client';
 import {
   trackChatPanelClick,
   trackMessageQueueClick,
-  trackRunFailedToastGoAmrClick,
   trackRunFailedToastSurfaceView,
   trackRunRecoveryActionClick,
   trackRunRecoveryActionSurfaceView,
@@ -184,7 +183,6 @@ import {
   RunErrorCard,
   RunErrorCardAction,
 } from './chat/RunErrorCard';
-import { UpgradeCard } from './chat/UpgradeCard';
 import { SupportDialog } from './chat/SupportDialog';
 import { Toast } from './Toast';
 import { supportChannels } from './chat/support-channels';
@@ -2101,9 +2099,11 @@ export function ChatPane({
   // meaningful for a failed run (retryAssistant present).
   const runFailureUi = retryAssistant
     ? resolveRunFailureUi(
-        failedRunErrorEvent?.code,
+        retryAssistant.agentId === 'amr' && failedRunErrorEvent?.code?.startsWith('AMR_')
+          ? undefined
+          : failedRunErrorEvent?.code,
         failedRunErrorEvent?.failureDetail,
-        retryAssistant.agentId,
+        retryAssistant.agentId === 'amr' ? undefined : retryAssistant.agentId,
         // The raw upstream sentence, so a failure whose copy names something the
         // gateway reported (the instant a model window reopens) can read it back
         // out. Same string the card renders under 「查看详情」.
@@ -2374,8 +2374,11 @@ export function ChatPane({
     failedRunErrorEvent?.code,
     rawError,
   );
+  // Fork (Local AI only): the Cloud balance / upgrade card is never drawn, so
+  // it can never take a failure off the white card (only an old Cloud run's
+  // insufficient-balance failure could have handed one over).
   const balanceCardCannotTakeTheHandoff =
-    failureCardHandedToAmrBalanceCard(runFailureUi) && amrBalanceCardUnavailable;
+    failureCardHandedToAmrBalanceCard(runFailureUi);
   const reconnectRowCannotTakeTheHandoff = reconnectRowOwnsFailure && !reconnect;
   const handoffTargetIsAbsent =
     balanceCardCannotTakeTheHandoff || reconnectRowCannotTakeTheHandoff;
@@ -2473,12 +2476,9 @@ export function ChatPane({
     !accessErrorCopy && retryAssistant && failedRunErrorEvent ? retryAssistant.id : null;
   // OPEND-2807 / G16: the failed run selects one fixed recovery action.
   // The classifier still owns approved copy and handoffs, never extra buttons.
-  const failedRunUsesCloud = retryAssistant?.agentId === 'amr';
-  const showCloudRetry = Boolean(retryAssistant && failedRunUsesCloud && onRetry);
-  const showCloudSwitchCta = Boolean(
-    retryAssistant && !failedRunUsesCloud
-    && (onSwitchToAmrAndRetry || onOpenAmrSettings),
-  );
+  // Fork (Local AI only): every run is a local CLI run and there is no Cloud
+  // to switch to, so that one action is always Retry on the same agent.
+  const showRetry = Boolean(retryAssistant && onRetry);
   const [supportDialogOpen, setSupportDialogOpen] = useState(false);
   // The separate balance card retains its existing plans entry.
   const openAmrPlans = useCallback((entrySource: 'chat_upgrade_card') => {
@@ -2499,10 +2499,9 @@ export function ChatPane({
   const visibleRecoveryActionTypes = useMemo(() => {
     const actions: TrackingRunRecoveryActionType[] = [];
     if (!displayError) return actions;
-    if (showCloudRetry) actions.push('manual_retry');
-    if (showCloudSwitchCta && onSwitchToAmrAndRetry) actions.push('switch_runtime_retry');
+    if (showRetry) actions.push('manual_retry');
     return actions;
-  }, [displayError, onSwitchToAmrAndRetry, showCloudRetry, showCloudSwitchCta]);
+  }, [displayError, showRetry]);
   const recoveryAnalyticsProps = useCallback((
     assistantMessage: ChatMessage,
     actionType: TrackingRunRecoveryActionType,
@@ -4518,7 +4517,7 @@ export function ChatPane({
                           {t('chat.runError.contactSupportCta')}
                         </RunErrorCardAction>
                         <ExportLogsAction />
-                        {showCloudRetry && retryAssistant && onRetry ? (
+                        {showRetry && retryAssistant && onRetry ? (
                           <RunErrorCardAction
                             type="button"
                             variant="primary"
@@ -4531,40 +4530,6 @@ export function ChatPane({
                           >
                             <Icon name="refresh" size={11} />
                             {t(retryLabelKey)}
-                          </RunErrorCardAction>
-                        ) : null}
-                        {showCloudSwitchCta ? (
-                          <RunErrorCardAction
-                            type="button"
-                            variant="primary"
-                            data-testid="chat-error-switch-to-cloud"
-                            // `handleSwitchToAmrAndRetry` 头一行就是同一道门控;
-                            // 挡住时这颗按钮点下去连设置面板都不会开。
-                            disabled={recoveryActionsDisabled}
-                            onClick={() => {
-                              trackRunFailedToastGoAmrClick(analytics.track, {
-                                page_name: 'chat_panel',
-                                area: 'chat_panel',
-                                element: 'go_amr',
-                              });
-                              recordAmrEntry(
-                                analytics.track,
-                                'chat_error_switch_retry_card',
-                                new Date(),
-                                { metricsConsent: config?.telemetry?.metrics === true },
-                              );
-                              if (retryAssistant && onSwitchToAmrAndRetry) {
-                                trackRecoveryClick(retryAssistant, 'switch_runtime_retry', {
-                                  agentProviderId: 'amr',
-                                  modelId: config?.agentModels?.amr?.model?.trim() || 'default',
-                                });
-                                onSwitchToAmrAndRetry(retryAssistant);
-                              } else {
-                                onOpenAmrSettings?.();
-                              }
-                            }}
-                          >
-                            {t('chat.amrCard.switchCta')}
                           </RunErrorCardAction>
                         ) : null}
                       </>
@@ -4583,14 +4548,6 @@ export function ChatPane({
                   * 剩在这儿的是拦截档:那一轮已经被 `retractPaintedTurn` 收回,
                   * 没有 run 也就没有轮次,读数不摆在末尾就彻底没地方说了。
                   */}
-                {tailAmrBalanceCardUsd != null ? (
-                  <UpgradeCard
-                    balanceUsd={tailAmrBalanceCardUsd}
-                    onUpgrade={
-                      onAmrBalanceUpgrade ?? (() => openAmrPlans('chat_upgrade_card'))
-                    }
-                  />
-                ) : null}
                 {/*
                  * 组件 22(重连,第 82–84 格 · S29):产品裁决用设计稿现有的设计,
                  * 位置在**会话中最后一行**。`reconnect` 为空就整行不在 ——
@@ -5397,12 +5354,6 @@ function ChatRows({
         />
       );
     }
-    /*
-     * 这一轮结束时留下的那张升级卡(T61)。画在助手消息**紧下面、同一行内**:
-     * 位置由 DOM 顺序本身保证,新一轮追加在后面,它自然就留在原处 ——
-     * 不需要任何「记住第几个位置」的计算,也就没有算错的可能。
-     */
-    const turnBalanceUsd = lowBalanceTurnCards?.get(m.id);
     const assistantRow = (
       <AssistantMessage
         message={m}
@@ -5512,13 +5463,8 @@ function ChatRows({
         nextStepVariant={nextStepVariant}
       />
     );
-    if (turnBalanceUsd == null) return assistantRow;
-    return (
-      <>
-        {assistantRow}
-        <UpgradeCard balanceUsd={turnBalanceUsd} onUpgrade={onLowBalanceTurnCardUpgrade} />
-      </>
-    );
+    // Fork (Local AI only): no Cloud balance / upgrade card under a turn.
+    return assistantRow;
   };
 
   if (items.length === 0) return null;

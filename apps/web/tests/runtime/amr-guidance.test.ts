@@ -181,16 +181,16 @@ describe('resolveRunFailureUi', () => {
       primaryAction: 'retry',
       titleKey: 'chat.runError.title.rateLimited',
       messageKey: 'chat.runError.rateLimitedMessage',
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
     const upstream = resolveRunFailureUi('UPSTREAM_UNAVAILABLE', null, 'claude');
     expect(upstream).toMatchObject({
       primaryAction: 'retry',
       titleKey: 'chat.runError.title.upstreamUnavailable',
       messageKey: 'chat.runError.upstreamUnavailableMessage',
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
-    expect(resolveRunFailureUi('UNAUTHORIZED', null, null).cloudSwitchCta).toBe(true);
+    expect(resolveRunFailureUi('UNAUTHORIZED', null, null).cloudSwitchCta).toBe(false);
   });
 
   // #895 follow-up: the daemon's fine-grained failure_detail can refine — and
@@ -207,18 +207,18 @@ describe('resolveRunFailureUi', () => {
   it('overrides a coarse RATE_LIMITED code with hard-quota / workspace-credits detail', () => {
     const hard = resolveRunFailureUi('RATE_LIMITED', 'hard_quota', 'claude');
     expect(hard).toMatchObject({
-      primaryAction: 'switch-to-cloud',
+      primaryAction: 'contact-support',
       titleKey: 'chat.runError.title.quotaExhausted',
       messageKey: 'chat.runError.quotaExhaustedMessage',
       secondaryRetry: false,
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
     const workspace = resolveRunFailureUi('RATE_LIMITED', 'workspace_credits_exhausted', 'claude');
     expect(workspace).toMatchObject({
-      primaryAction: 'switch-to-cloud',
+      primaryAction: 'contact-support',
       titleKey: 'chat.runError.title.quotaExhausted',
       messageKey: 'chat.runError.workspaceCreditsMessage',
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
   });
 
@@ -229,7 +229,7 @@ describe('resolveRunFailureUi', () => {
     expect(transient).toMatchObject({
       primaryAction: 'retry',
       titleKey: 'chat.runError.title.rateLimited',
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
   });
 
@@ -242,7 +242,7 @@ describe('resolveRunFailureUi', () => {
       primaryAction: 'retry',
       titleKey: 'chat.runError.title.cliMissing',
       messageKey: 'chat.runError.cliMissingMessage',
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
   });
 
@@ -259,7 +259,7 @@ describe('resolveRunFailureUi', () => {
         titleKey: 'chat.runError.title.strategyTaskHalted',
         messageKey: 'chat.runError.strategyTaskStateMismatchMessage',
         secondaryRetry: false,
-        cloudSwitchCta: agent !== 'amr',
+        cloudSwitchCta: false,
       });
     }
   });
@@ -289,7 +289,7 @@ describe('resolveRunFailureUi', () => {
           titleKey,
           messageKey,
           secondaryRetry: false,
-          cloudSwitchCta: agent !== 'amr',
+          cloudSwitchCta: false,
         });
       }
     }
@@ -301,7 +301,7 @@ describe('resolveRunFailureUi', () => {
         suppressCard: true,
         primaryAction: 'retry',
         secondaryRetry: false,
-        cloudSwitchCta: agent !== 'amr',
+        cloudSwitchCta: false,
         titleKey: 'chat.runError.title.gitBashMissing',
         messageKey: 'chat.runError.gitBashMissingMessage',
       });
@@ -323,7 +323,7 @@ describe('resolveRunFailureUi', () => {
         titleKey: 'chat.runError.title.cpuUnsupported',
         messageKey: 'chat.runError.cpuUnsupportedMessage',
         secondaryRetry: false,
-        cloudSwitchCta: agent !== 'amr',
+        cloudSwitchCta: false,
       });
     }
   });
@@ -358,7 +358,7 @@ describe('resolveRunFailureUi', () => {
           titleKey,
           messageKey,
           secondaryRetry: false,
-          cloudSwitchCta: agent !== 'amr',
+          cloudSwitchCta: false,
         });
       }
     }
@@ -379,7 +379,7 @@ describe('resolveRunFailureUi', () => {
         titleKey: 'chat.runError.title.modelUnavailable',
         messageKey: 'chat.runError.modelUnavailableMessage',
         secondaryRetry: false,
-        cloudSwitchCta: agent !== 'amr',
+        cloudSwitchCta: false,
       });
       expect(ui.primaryAction).not.toBe('retry');
     }
@@ -405,7 +405,7 @@ describe('resolveRunFailureUi', () => {
         titleKey: 'chat.runError.title.cliSessionRefused',
         messageKey: 'chat.runError.cliSessionRefusedMessage',
         secondaryRetry: false,
-        cloudSwitchCta: true,
+        cloudSwitchCta: false,
       });
       // One sentence, no interpolated build number. Naming the version this run
       // started with needs a pre-spawn `--version` read the failure path does
@@ -462,8 +462,8 @@ describe('resolveRunFailureUi', () => {
 
   it('shows plain retry (no card) for generic non-AMR failures', () => {
     const ui = resolveRunFailureUi('AGENT_EXECUTION_FAILED', null, 'claude');
-    expect(ui).toMatchObject({ primaryAction: 'retry', cloudSwitchCta: true, messageKey: null });
-    expect(resolveRunFailureUi('AGENT_UNAVAILABLE', null, 'codex').cloudSwitchCta).toBe(true);
+    expect(ui).toMatchObject({ primaryAction: 'retry', cloudSwitchCta: false, messageKey: null });
+    expect(resolveRunFailureUi('AGENT_UNAVAILABLE', null, 'codex').cloudSwitchCta).toBe(false);
   });
 
   it('localizes a mid-stream connection drop for any agent, no AMR promotion', () => {
@@ -473,7 +473,7 @@ describe('resolveRunFailureUi', () => {
         primaryAction: 'retry',
         messageKey: 'chat.connectionDropped',
         secondaryRetry: false,
-        cloudSwitchCta: true,
+        cloudSwitchCta: false,
       });
     }
   });
@@ -490,7 +490,7 @@ describe('resolveRunFailureUi', () => {
         primaryAction: 'retry',
         titleKey: 'chat.runError.title.connectionDropped',
         messageKey: 'chat.connectionDropped',
-        cloudSwitchCta: agent !== 'amr',
+        cloudSwitchCta: false,
       });
     }
   });
@@ -519,7 +519,7 @@ describe('resolveRunFailureUi', () => {
           titleKey: 'chat.runError.title.signInRequired.other',
           messageKey: 'chat.runError.signInMessage.other',
           secondaryRetry: false,
-          cloudSwitchCta: true,
+          cloudSwitchCta: false,
         });
       }
     }
@@ -652,7 +652,7 @@ describe('resolveRunFailureUi', () => {
       primaryAction: 'launch-terminal-auth',
       messageKey: 'chat.runError.signInMessage.other',
       secondaryRetry: true,
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
   });
 
@@ -670,7 +670,7 @@ describe('resolveRunFailureUi', () => {
       primaryAction: 'launch-terminal-switch-model',
       messageKey: null,
       secondaryRetry: true,
-      cloudSwitchCta: true,
+      cloudSwitchCta: false,
     });
   });
 

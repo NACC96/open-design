@@ -120,12 +120,10 @@ describe('RecentProjectsStrip collection tabs (OPEND-3108)', () => {
     expect(options.map((node) => node.textContent?.trim())).toEqual([
       'Recently viewed',
       'Personal projects',
-      'Team projects',
     ]);
     expect(options.map((node) => node.getAttribute('data-testid'))).toEqual([
       'recent-projects-collection-recent',
       'recent-projects-collection-personalProjects',
-      'recent-projects-collection-teamProjects',
     ]);
     // The tabs are part of the page head: the title row above, the tabs and
     // the toolbar cluster on the row below (Demo `recent-projects__head--personal`).
@@ -145,37 +143,10 @@ describe('RecentProjectsStrip collection tabs (OPEND-3108)', () => {
     expect(screen.getByTestId('recent-projects-collection-recent').getAttribute('aria-checked')).toBe('false');
     expect(cardNames(container)).toEqual(['My draft', 'Older draft']);
 
-    fireEvent.click(screen.getByTestId('recent-projects-collection-teamProjects'));
-    expect(cardNames(container)).toEqual(['Shared with the team']);
+    expect(screen.queryByTestId('recent-projects-collection-teamProjects')).toBeNull();
 
     fireEvent.click(screen.getByTestId('recent-projects-collection-recent'));
     expect(cardNames(container)).toEqual(['My draft', 'Shared with the team', 'Older draft']);
-  });
-
-  it('lets the host pick the opening tab and hear every switch (deep link to 团队项目)', () => {
-    const onCollectionChange = vi.fn();
-    const { container } = renderPage({ collection: 'teamProjects', onCollectionChange });
-
-    expect(screen.getByTestId('recent-projects-collection-teamProjects').getAttribute('aria-checked')).toBe('true');
-    expect(cardNames(container)).toEqual(['Shared with the team']);
-
-    fireEvent.click(screen.getByTestId('recent-projects-collection-personalProjects'));
-    expect(onCollectionChange).toHaveBeenCalledWith('personalProjects');
-    // Controlled: the host owns the value, so the grid does not move until
-    // the host re-renders with the new collection.
-    expect(cardNames(container)).toEqual(['Shared with the team']);
-  });
-
-  it('explains an empty tab instead of dropping to a bare grid', () => {
-    const { container } = renderPage({ projects: [MINE, OLDER_MINE] });
-
-    fireEvent.click(screen.getByTestId('recent-projects-collection-teamProjects'));
-    expect(cardNames(container)).toEqual([]);
-    const empty = container.querySelector('.recent-projects__collection-empty');
-    expect(empty?.textContent).toContain('Projects shared to the team will appear here');
-    // The tabs and the toolbar survive an empty tab, so the user can leave it.
-    expect(tabs(container)).toBeTruthy();
-    expect(container.querySelector('.recent-projects__controls')).toBeTruthy();
   });
 
   it('keeps the tabs off the team space and the home rail', () => {
@@ -220,10 +191,10 @@ describe('personal workspace hides the 团队项目 tab (OPEND-3285)', () => {
     expect(screen.queryByTestId('recent-projects-collection-teamProjects')).toBeNull();
   });
 
-  it('keeps all three tabs in a team workspace', () => {
+  it('keeps the team tab hidden even with an old team workspace', () => {
     workspaceState.context = teamContext();
     const { container } = renderPage();
-    expect(within(tabs(container)).getAllByRole('radio')).toHaveLength(3);
+    expect(within(tabs(container)).getAllByRole('radio')).toHaveLength(2);
   });
 
   it('falls back to 最近浏览过 when a personal workspace lands on the team tab (deep link / stale state)', () => {
@@ -234,11 +205,11 @@ describe('personal workspace hides the 团队项目 tab (OPEND-3285)', () => {
     expect(screen.queryByTestId('recent-projects-collection-teamProjects')).toBeNull();
   });
 
-  it('does not reset the team tab while the workspace context is still loading', () => {
+  it('resets a retired team tab without waiting for workspace discovery', () => {
     workspaceState.context = null;
     workspaceState.loading = true;
     const onCollectionChange = vi.fn();
     renderPage({ collection: 'teamProjects', onCollectionChange });
-    expect(onCollectionChange).not.toHaveBeenCalled();
+    expect(onCollectionChange).toHaveBeenCalledWith('recent');
   });
 });

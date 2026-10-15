@@ -83,7 +83,6 @@ describe('router entry sub-views', () => {
   it('round-trips entry sub-views through buildPath', () => {
     for (const route of [
       { kind: 'home', view: 'home' } as Route,
-      { kind: 'home', view: 'onboarding' } as Route,
       { kind: 'home', view: 'projects' } as Route,
       { kind: 'home', view: 'tasks' } as Route,
       { kind: 'home', view: 'plugins' } as Route,
@@ -94,8 +93,18 @@ describe('router entry sub-views', () => {
     }
   });
 
-  it('parses /onboarding as the global onboarding panel', () => {
-    expect(parseRoute('/onboarding')).toEqual({ kind: 'home', view: 'onboarding' });
-    expect(buildPath({ kind: 'home', view: 'onboarding' })).toBe('/onboarding');
+  it('sends the retired /onboarding route to Home (Local AI only fork)', () => {
+    expect(parseRoute('/onboarding')).toEqual({ kind: 'home', view: 'home' });
+    expect(parseRoute('/onboarding/')).toEqual({ kind: 'home', view: 'home' });
+    expect(buildPath({ kind: 'home', view: 'onboarding' })).toBe('/');
   });
+});
+
+
+describe('retired team destinations', () => {
+  it.each(['/members', '/board', '/workspace-settings', '/collab-demo/project-a'])(
+    'routes %s to Home without restoring a team screen', (path) => {
+      expect(parseRoute(path)).toEqual({ kind: 'home', view: 'home' });
+    },
+  );
 });
