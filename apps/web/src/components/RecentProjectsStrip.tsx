@@ -1530,7 +1530,7 @@ export function RecentProjectsStrip({
           {t(
             collection === 'teamProjects'
               ? 'entry.blankAllProjectsDescription'
-              : 'entry.blankDraftsDescription',
+              : 'entry.draftsDescription',
           )}
         </p>
       ) : null}

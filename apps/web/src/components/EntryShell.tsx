@@ -1911,7 +1911,7 @@ export function EntryShell({
               ) : projectSearchProjects.length === 0 ? (
                 <EntryBlankState
                   heading={t('entry.navDrafts')}
-                  description={t('entry.blankDraftsDescription')}
+                  description={t('entry.draftsDescription')}
                   actionLabel={t('entry.blankCreate')}
                   onCreate={() => startBlankProjectFromRail()}
                 />
