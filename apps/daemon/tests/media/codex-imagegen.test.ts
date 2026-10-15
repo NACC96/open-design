@@ -34,6 +34,9 @@ type FakeCodexOptions = {
   stderr?: string;
   agentMessage?: string;
   extraOutput?: string;
+  credentials?: { file?: string; keyring?: string; secrets?: string };
+  configReadError?: boolean;
+  changeStoreAfterRead?: string;
 };
 
 /**
@@ -44,12 +47,18 @@ type FakeCodexOptions = {
  */
 async function installFakeCodex(root: string, options: FakeCodexOptions = {}): Promise<{
   bin: string;
-  calls: () => Promise<Array<{ args: string[]; stdin: string; env: Record<string, string | null> }>>;
+  calls: () => Promise<Array<{ args: string[]; stdin: string; env: Record<string, string | null>; store: string; account?: string }>>;
+  invocations: () => Promise<Array<{ args: string[]; store: string; account?: string }>>;
 }> {
   const bin = path.join(root, `fake-codex-${Math.random().toString(36).slice(2)}.mjs`);
   const callsFile = path.join(root, 'calls.jsonl');
+  const invocationsFile = path.join(root, 'invocations.jsonl');
   const config = {
     callsFile,
+    invocationsFile,
+    credentials: options.credentials,
+    configReadError: options.configReadError,
+    changeStoreAfterRead: options.changeStoreAfterRead,
     png: PNG_BASE64,
     outputFileName: options.outputFileName === undefined
       ? 'exec-0d4c4e7e-6a0e-4bb4-9a37-1b2f3c4d5e6f.png'
@@ -63,15 +72,52 @@ async function installFakeCodex(root: string, options: FakeCodexOptions = {}): P
     extraOutput: options.extraOutput ?? '',
   };
   await writeFile(bin, `#!/usr/bin/env node
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 import path from 'node:path';
 
 const config = ${JSON.stringify(config)};
 const args = process.argv.slice(2);
-if (args[0] === 'login' && args[1] === 'status') {
-  process.stdout.write(config.loginStatus + '\\n');
-  process.exit(config.loginStatusExit);
+const configFile = path.join(process.env.CODEX_HOME, 'config.toml');
+let userConfig = '';
+try { userConfig = readFileSync(configFile, 'utf8'); } catch {}
+const configuredStore = /^cli_auth_credentials_store\\s*=\\s*"([^"\\n]+)"/m.exec(userConfig)?.[1];
+const configuredSecrets = /^secret_auth_storage\\s*=\\s*(true|false)/m.exec(userConfig)?.[1];
+let secrets = args.includes('--ignore-user-config') ? process.platform === 'win32' : (configuredSecrets ? configuredSecrets === 'true' : process.platform === 'win32');
+let store = args.includes('--ignore-user-config') ? 'file' : (configuredStore ?? 'file');
+for (let i = 0; i < args.length - 1; i++) {
+  if (args[i] !== '-c') continue;
+  const match = /^cli_auth_credentials_store="([^"]+)"$/.exec(args[i + 1]);
+  if (match) store = match[1];
+  const secretMatch = /^features[.]secret_auth_storage=(true|false)$/.exec(args[i + 1]);
+  if (secretMatch) secrets = secretMatch[1] === 'true';
 }
+const keyringAccount = secrets ? config.credentials?.secrets : config.credentials?.keyring;
+const account = config.credentials
+  ? (store === 'auto' ? (keyringAccount ?? config.credentials.file) : store === 'keyring' ? keyringAccount : config.credentials[store])
+  : 'default-test-account';
+appendFileSync(config.invocationsFile, JSON.stringify({args, store, account}) + '\\n');
+if (args[0] === 'app-server') {
+  const lines = createInterface({input: process.stdin});
+  lines.on('line', line => {
+    const request = JSON.parse(line);
+    if (request.method === 'initialize') {
+      process.stdout.write(JSON.stringify({id: request.id, result: {userAgent: 'fake-codex'}}) + '\\n');
+    }
+    if (request.method === 'config/read') {
+      const response = config.configReadError
+        ? {error: {code: -32603, message: 'fake config failure'}}
+        : {result: {config: {cli_auth_credentials_store: configuredStore ?? null, features: configuredSecrets ? {secret_auth_storage: configuredSecrets === 'true'} : {}, unrelated_secret: 'MUST_NOT_COPY_CONFIG'}, origins: {}}};
+      process.stdout.write(JSON.stringify({id: request.id, ...response}) + '\\n');
+      if (config.changeStoreAfterRead) {
+        writeFileSync(configFile, 'cli_auth_credentials_store = "' + config.changeStoreAfterRead + '"\\n');
+      }
+    }
+  });
+} else if (args[0] === 'login' && args[1] === 'status') {
+  process.stdout.write((account ? config.loginStatus : 'Not logged in') + '\\n');
+  process.exitCode = account ? config.loginStatusExit : 1;
+} else {
 let stdin = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { stdin += chunk; });
@@ -79,12 +125,19 @@ process.stdin.on('end', async () => {
   appendFileSync(config.callsFile, JSON.stringify({
     args,
     stdin,
+    store,
+    account,
     env: {
       CODEX_API_KEY: process.env.CODEX_API_KEY ?? null,
       OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? null,
       CODEX_HOME: process.env.CODEX_HOME ?? null,
     },
   }) + '\\n');
+  if (!account) {
+    process.stderr.write('No credentials in selected ' + store + ' store');
+    process.exitCode = 1;
+    return;
+  }
   process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: config.threadId }) + '\\n');
   process.stdout.write(JSON.stringify({ type: 'turn.started' }) + '\\n');
   process.stdout.write(config.extraOutput);
@@ -98,10 +151,15 @@ process.stdin.on('end', async () => {
   process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 2 } }) + '\\n');
   process.exitCode = config.exitCode;
 });
+}
 `, 'utf8');
   await chmod(bin, 0o755);
   return {
     bin,
+    invocations: async () => {
+      const raw = await readFile(invocationsFile, 'utf8').catch(() => '');
+      return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    },
     calls: async () => {
       const raw = await readFile(callsFile, 'utf8').catch(() => '');
       return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
@@ -263,15 +321,76 @@ describe('Codex Subscription image provider', () => {
     expect(call!.env.CODEX_HOME).toBe(configuredHome);
   });
 
-  it('asks the CLI for the login when credentials live in the OS keyring', async () => {
-    // No auth.json at all — `codex login status` is the only witness.
-    const fake = await installFakeCodex(root, { loginStatus: 'Logged in using ChatGPT' });
+  it.each([
+    { store: 'keyring', credentials: { keyring: 'keyring-user' }, expected: 'keyring-user' },
+    { store: 'file', credentials: { file: 'file-user', keyring: 'different-user' }, expected: 'file-user' },
+    { store: 'auto', credentials: { file: 'different-user', keyring: 'keyring-user' }, expected: 'keyring-user' },
+    { store: 'auto', credentials: { file: 'file-user' }, expected: 'file-user' },
+    { store: undefined, credentials: { file: 'file-user', keyring: 'different-user' }, expected: 'file-user' },
+  ])('uses the same selected account for login and generation with $store ($expected)', async ({store, credentials, expected}) => {
+    await mkdir(codexHome, { recursive: true });
+    const configText = store ? `cli_auth_credentials_store = "${store}"\n` : '';
+    await writeFile(path.join(codexHome, 'config.toml'), configText);
+    const fake = await installFakeCodex(root, { credentials });
     process.env.CODEX_BIN = fake.bin;
 
     const result = await generate();
 
     expect(result.providerId).toBe('codex');
-    expect(await fake.calls()).toHaveLength(1);
+    const invocations = (await fake.invocations()).filter(call => ['login', 'exec'].includes(call.args[0]!));
+    expect(invocations).toHaveLength(2);
+    for (const call of invocations) {
+      expect(call.store).toBe(store ?? 'file');
+      expect(call.account).toBe(expected);
+      expect(call.args).toContain(`cli_auth_credentials_store="${store ?? 'file'}"`);
+      expect(call.args.join(' ')).not.toContain('MUST_NOT_COPY_CONFIG');
+    }
+    expect(invocations[1]!.args).toContain('--ignore-user-config');
+    expect(await readFile(path.join(codexHome, 'config.toml'), 'utf8')).toBe(configText);
+  });
+
+  it('does not fall back to a file account when the explicit keyring has no login', async () => {
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(path.join(codexHome, 'config.toml'), 'cli_auth_credentials_store = "keyring"\n');
+    const fake = await installFakeCodex(root, { credentials: { file: 'wrong-file-user' } });
+    process.env.CODEX_BIN = fake.bin;
+    await expect(generate()).rejects.toMatchObject({ code: 'CODEX_AUTH_REQUIRED' });
+    expect(await fake.calls()).toHaveLength(0);
+  });
+
+  it.each([true, false])('preserves the selected keyring backend with secret_auth_storage=%s', async (secrets) => {
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(path.join(codexHome, 'config.toml'), `cli_auth_credentials_store = "keyring"\n[features]\nsecret_auth_storage = ${secrets}\n`);
+    const fake = await installFakeCodex(root, {
+      credentials: { keyring: 'direct-keyring-user', secrets: 'encrypted-keyring-user' },
+    });
+    process.env.CODEX_BIN = fake.bin;
+    await generate();
+    const authCalls = (await fake.invocations()).filter(call => ['login', 'exec'].includes(call.args[0]!));
+    expect(authCalls.map(call => call.account)).toEqual(Array(2).fill(secrets ? 'encrypted-keyring-user' : 'direct-keyring-user'));
+    expect(authCalls.every(call => call.args.includes(`features.secret_auth_storage=${secrets}`))).toBe(true);
+  });
+
+  it('pins the resolved store even if config changes between the read and login check', async () => {
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(path.join(codexHome, 'config.toml'), 'cli_auth_credentials_store = "keyring"\n');
+    const fake = await installFakeCodex(root, {
+      credentials: { file: 'different-user', keyring: 'selected-user' }, changeStoreAfterRead: 'file',
+    });
+    process.env.CODEX_BIN = fake.bin;
+    await generate();
+    const authCalls = (await fake.invocations()).filter(call => ['login', 'exec'].includes(call.args[0]!));
+    expect(authCalls.map(call => call.account)).toEqual(['selected-user', 'selected-user']);
+  });
+
+  it.each(['config-error', 'unknown-store'])('fails closed on %s instead of guessing a credential store', async failure => {
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(path.join(codexHome, 'config.toml'), 'cli_auth_credentials_store = "unknown"\n');
+    const fake = await installFakeCodex(root, { configReadError: failure === 'config-error' });
+    process.env.CODEX_BIN = fake.bin;
+    await expect(generate()).rejects.toThrow(/credential store/);
+    expect(await fake.calls()).toHaveLength(0);
+    expect((await fake.invocations()).some(call => call.args[0] === 'login')).toBe(false);
   });
 
   it('refuses to run when Codex is signed out, naming the fix', async () => {
@@ -386,6 +505,7 @@ describe('codex imagegen invocation', () => {
       'exec', '--json', '--skip-git-repo-check', '--ephemeral', '--ignore-user-config',
       '--sandbox', 'read-only', '-C', '/tmp/od-codex-imagegen-x',
       '-c', 'forced_login_method="chatgpt"',
+      '-c', 'cli_auth_credentials_store="file"',
       '--disable', 'hooks', '--disable', 'plugins', '--disable', 'apps',
       '--disable', 'shell_tool', '--disable', 'multi_agent',
       '--model', 'gpt-6.1-sol',

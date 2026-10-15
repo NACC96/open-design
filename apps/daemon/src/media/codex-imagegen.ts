@@ -20,6 +20,8 @@ import {
   spawnEnvForAgent,
 } from '../agents.js';
 import { agentCliEnvForAgent, readAppConfig } from '../app-config.js';
+import { isSandboxModeEnabled } from '../sandbox-mode.js';
+import { readCodexAuthConfig, codexAuthConfigArgs, type CodexAuthConfig } from './codex-auth-config.js';
 import {
   codexHomeFromEnv,
   resolveCodexSubscriptionStatus,
@@ -179,8 +181,15 @@ function runCodex(
   });
 }
 
-async function probeCodexLoginStatus(launch: CodexLaunch & { command: string }): Promise<string | null> {
-  const invocation = createCommandInvocation({ command: launch.command, args: ['login', 'status'], env: launch.env });
+async function probeCodexLoginStatus(
+  launch: CodexLaunch & { command: string },
+  authConfig: CodexAuthConfig,
+): Promise<string | null> {
+  const invocation = createCommandInvocation({
+    command: launch.command,
+    args: ['login', 'status', ...codexAuthConfigArgs(authConfig)],
+    env: launch.env,
+  });
   return new Promise((resolve) => {
     // This bounded status command does not start a generation or agent turn.
     execFile(invocation.command, invocation.args, {
@@ -195,14 +204,22 @@ async function probeCodexLoginStatus(launch: CodexLaunch & { command: string }):
  * ChatGPT. Checked before every render so a missing CLI or login fails with a
  * sentence that names the fix instead of a spawn error.
  */
-async function codexReadiness(launch: CodexLaunch): Promise<CodexSubscriptionStatus> {
+async function codexReadiness(launch: CodexLaunch): Promise<{
+  status: CodexSubscriptionStatus;
+  authConfig?: CodexAuthConfig;
+}> {
   const command = launch.command;
-  return resolveCodexSubscriptionStatus({
-    codexInstalled: Boolean(command),
-    ...(command
-      ? { probeLoginStatus: () => probeCodexLoginStatus({ ...launch, command }) }
-      : {}),
-  });
+  if (!command || isSandboxModeEnabled(process.env)) {
+    return { status: await resolveCodexSubscriptionStatus({ codexInstalled: Boolean(command) }) };
+  }
+  const authConfig = await readCodexAuthConfig({ ...launch, command });
+  return {
+    authConfig,
+    status: await resolveCodexSubscriptionStatus({
+      codexInstalled: true,
+      probeLoginStatus: () => probeCodexLoginStatus({ ...launch, command }, authConfig),
+    }),
+  };
 }
 
 function aspectSizeHint(aspect: string | undefined): string {
@@ -258,6 +275,7 @@ export function codexImagegenArgs(input: {
   workDir: string;
   imageRefs: ReadonlyArray<{ abs: string }>;
   model?: string | undefined;
+  authConfig?: CodexAuthConfig | undefined;
 }): string[] {
   const args = [
     'exec',
@@ -270,6 +288,7 @@ export function codexImagegenArgs(input: {
     '-C',
     input.workDir,
     '-c', 'forced_login_method="chatgpt"',
+    ...codexAuthConfigArgs(input.authConfig ?? { credentialStore: 'file' }),
     '--disable', 'hooks',
     '--disable', 'plugins',
     '--disable', 'apps',
@@ -352,7 +371,7 @@ async function findGeneratedImage(threadDir: string): Promise<{ file: string; ex
 export async function renderCodexImage(input: CodexImageRenderInput): Promise<CodexImageRenderResult> {
   const launch = await resolveCodexLaunch(input.dataDir);
   const command = launch.command;
-  const status = await codexReadiness(launch);
+  const { status, authConfig } = await codexReadiness(launch);
   if (!status.available || !command) {
     throw new CodexImagegenError(status.message, {
       code: status.reason === 'not-installed' || status.reason === 'sandbox'
@@ -374,7 +393,7 @@ export async function renderCodexImage(input: CodexImageRenderInput): Promise<Co
     input.onProgress?.('Generating with Codex (ChatGPT subscription)…');
     const result = await runCodex(
       { ...launch, command },
-      codexImagegenArgs({ workDir, imageRefs: input.imageRefs, model }),
+      codexImagegenArgs({ workDir, imageRefs: input.imageRefs, model, authConfig }),
       {
         cwd: workDir,
         stdin: codexImagegenPrompt({
