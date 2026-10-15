@@ -27,6 +27,7 @@ import {
   resetWorkspaceContextCache,
 } from '../../src/collab/useWorkspaceContext';
 import { workspaceDirectoryFixture } from '../helpers/workspace-context';
+import { setHomeHeroPrompt } from '../helpers/home-hero-lexical';
 import {
   fetchProjectFiles,
   invalidateProjectFilesCache,
@@ -270,6 +271,35 @@ describe('EntryShell signed-out recent projects', () => {
     expect(screen.queryByTestId('community-composer-dock')).toBeNull();
     // Home's own composer is still the single composer in the shell.
     expect(screen.getAllByTestId('home-hero-composer-card')).toHaveLength(1);
+  });
+
+  it.each([
+    ['/', 'entry-nav-drafts', '/drafts'],
+    ['/drafts', 'entry-nav-home', '/'],
+  ])('resets the shared scroll offset from %s on local navigation', async (from, destination, to) => {
+    renderAt(from, { projects: [localProject] });
+    const scroller = screen.getByRole('main');
+    scroller.scrollTop = 320;
+    fireEvent.click(await screen.findByTestId(destination));
+
+    await waitFor(() => expect(window.location.pathname).toBe(to));
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it('keeps local Home submission pending until project creation finishes', async () => {
+    let finish!: (accepted: boolean) => void;
+    const onCreateProject = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    renderAt('/', { onCreateProject });
+    await screen.findByTestId('home-hero-input');
+    setHomeHeroPrompt('Build a local project');
+    const submit = screen.getByTestId('home-hero-submit') as HTMLButtonElement;
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(onCreateProject).toHaveBeenCalledOnce());
+    expect(onCreateProject).toHaveBeenCalledWith(expect.objectContaining({ pendingPrompt: 'Build a local project' }));
+    expect(submit.disabled).toBe(true);
+    await act(async () => { finish(true); });
+    await waitFor(() => expect(submit.disabled).toBe(false));
   });
 });
 

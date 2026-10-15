@@ -6,7 +6,7 @@
 // daemon copy that still names a retired Cloud / API-key runtime is cleared so
 // the same auto-pick runs.
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/App';
@@ -34,12 +34,14 @@ vi.mock('../../src/router', () => ({
 }));
 
 vi.mock('../../src/components/EntryView', () => ({
-  EntryView: ({ config }: { config: AppConfig }) => (
+  EntryView: ({ config, agents, agentsLoading }: { config: AppConfig; agents: AgentInfo[]; agentsLoading: boolean }) => (
     <>
       <div data-testid="home-entry">home</div>
       <div data-testid="agent-id">{config.agentId ?? 'none'}</div>
       <div data-testid="mode">{config.mode}</div>
       <div data-testid="onboarding-completed">{String(config.onboardingCompleted)}</div>
+      <div data-testid="agents-loading">{String(agentsLoading)}</div>
+      <div data-testid="agent-count">{agents.length}</div>
     </>
   ),
 }));
@@ -156,6 +158,7 @@ describe('App first run (Local AI only)', () => {
     cleanup();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('ships with onboarding already complete', () => {
@@ -223,6 +226,28 @@ describe('App first run (Local AI only)', () => {
     });
     await waitFor(() => expect(mockedFetchAgentsStream).toHaveBeenCalled());
     expect(screen.getByTestId('agent-id').textContent).toBe('none');
+    expectNeverRoutedToOnboarding();
+  });
+
+  it('rescans local CLIs on window focus after external installation or login', async () => {
+    const startedAt = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    mockedLoadConfig.mockReturnValue({ ...freshInstallConfig(), agentId: 'claude' });
+    mockedFetchDaemonConfig.mockResolvedValue({});
+    mockedFetchAgentsStream.mockResolvedValue([agent('claude', true)]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('agent-id').textContent).toBe('claude'));
+    await waitFor(() => expect(mockedFetchAgentsStream).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId('agents-loading').textContent).toBe('false'));
+
+    mockedFetchAgentsStream.mockResolvedValue([agent('claude', true), agent('codex', true)]);
+    now.mockReturnValue(startedAt + 10_001);
+    fireEvent.focus(window);
+
+    await waitFor(() => expect(mockedFetchAgentsStream).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('agent-count').textContent).toBe('2'));
+    expect(screen.getByTestId('mode').textContent).toBe('daemon');
     expectNeverRoutedToOnboarding();
   });
 
