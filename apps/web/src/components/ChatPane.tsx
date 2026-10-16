@@ -53,6 +53,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import historyStyles from './chat/ConversationHistoryDock.module.css';
+import { ForkProjectAction } from './chat/ForkProjectAction';
 import { hasOdCard, OD_NEXT_STRATEGY_ID, type ProjectMediaTask } from '@open-design/contracts';
 import { useAnalytics } from '../analytics/provider';
 import { getResolvedDeviceId } from '../analytics/client';
@@ -727,6 +728,8 @@ interface Props {
   shareToOpenDesignBusyMessageId?: string | null;
   forceStreamingMessageIds?: Set<string>;
   initialDraft?: string;
+  initialAttachments?: ChatAttachment[];
+  onInitialDraftPersisted?: () => void;
   // Product path of the Home recommendation that started this project. When
   // set (and concrete), the empty-conversation starter cards show that path's
   // starters — one-click composer replacements — instead of the generic set.
@@ -750,6 +753,9 @@ interface Props {
   /** `anchorId` 同上。 */
   onArtifactDownload?: (fileName: string, anchorId?: string) => void;
   onForkFromMessage?: (assistantMessage: ChatMessage) => void;
+  onForkProject?: (message: ChatMessage) => void;
+  forkingProjectMessageId?: string | null;
+  persistedUserMessageIds?: ReadonlySet<string>;
   forkingMessageId?: string | null;
   // Header "+" button — kicks off ProjectView's create-conversation flow.
   onNewConversation?: () => void;
@@ -1354,6 +1360,8 @@ export function ChatPane({
   shareToOpenDesignBusyMessageId,
   forceStreamingMessageIds,
   initialDraft,
+  initialAttachments,
+  onInitialDraftPersisted,
   onboardingStarterPath = null,
   composerPlaceholder,
   onSubmitQuestionForm,
@@ -1365,6 +1373,9 @@ export function ChatPane({
   onArtifactDownload,
   onForkFromMessage,
   forkingMessageId = null,
+  onForkProject,
+  forkingProjectMessageId = null,
+  persistedUserMessageIds,
   onNewConversation,
   newConversationDisabled = false,
   conversations,
@@ -4055,6 +4066,8 @@ export function ChatPane({
       sendDisabled={sendDisabled}
       inputDisabled={viewerOnly}
       initialDraft={initialDraft}
+      initialAttachments={initialAttachments}
+      onInitialDraftPersisted={onInitialDraftPersisted}
       externalPendingUploads={homeAttachmentUploads}
       onRemoveExternalPendingUpload={onDismissHomeAttachmentUpload}
       composerPlaceholder={composerPlaceholder}
@@ -4428,6 +4441,9 @@ export function ChatPane({
                     onAmrBalanceUpgrade ?? (() => openAmrPlans('chat_upgrade_card'))
                   }
                   onResendUserMessage={onResendUserMessage}
+                  onForkProject={viewerOnly ? undefined : onForkProject}
+                  forkingProjectMessageId={forkingProjectMessageId}
+                  persistedUserMessageIds={persistedUserMessageIds}
                   onRetryImage={handleRetryImage}
                   projectId={projectId}
                   projectKindForTracking={projectKindForTracking}
@@ -5188,6 +5204,9 @@ function ChatRows({
   lowBalanceTurnCards,
   onLowBalanceTurnCardUpgrade,
   onResendUserMessage,
+  onForkProject,
+  forkingProjectMessageId,
+  persistedUserMessageIds,
   onRetryImage,
   projectId,
   projectKindForTracking,
@@ -5267,6 +5286,9 @@ function ChatRows({
   /** 升级卡那颗按钮。落点由宿主决定,和流水末尾那张同一个 handler。 */
   onLowBalanceTurnCardUpgrade?: () => void;
   onResendUserMessage?: (message: ChatMessage) => void;
+  onForkProject?: (message: ChatMessage) => void;
+  forkingProjectMessageId?: string | null;
+  persistedUserMessageIds?: ReadonlySet<string>;
   /** 生图失败格的「重试」—— 见 ChatPane 的 handleRetryImage(D59) */
   onRetryImage?: (row: { total: number; done: number; failed: number }, index: number) => void;
   streaming: boolean;
@@ -5394,6 +5416,9 @@ function ChatRows({
           t={t}
           highlighted={highlightedUserMessageId === m.id}
           onResend={onResendUserMessage}
+          onForkProject={persistedUserMessageIds?.has(m.id) && !m.sendFailed ? onForkProject : undefined}
+          forkProjectBusy={forkingProjectMessageId === m.id}
+          forkProjectDisabled={Boolean(forkingProjectMessageId)}
         />
       );
     }
@@ -6610,6 +6635,9 @@ const UserMessage = memo(UserMessageImpl);
   t,
   highlighted,
   onResend,
+  onForkProject,
+  forkProjectBusy = false,
+  forkProjectDisabled = false,
 }: {
   message: ChatMessage;
   projectId: string | null;
@@ -6617,6 +6645,9 @@ const UserMessage = memo(UserMessageImpl);
   onRequestOpenFile?: (name: string) => void;
   /** 发送失败时那颗常驻的「重试」(稿子第 49 / 50 格) */
   onResend?: (message: ChatMessage) => void;
+  onForkProject?: (message: ChatMessage) => void;
+  forkProjectBusy?: boolean;
+  forkProjectDisabled?: boolean;
   /** Legacy mirror-fixture inputs are accepted but intentionally not rendered. */
   onRequestPluginDetails?: (pluginId: string) => void;
   onRequestDesignSystemDetails?: (system: DesignSystemSummary) => void;
@@ -6707,22 +6738,22 @@ const UserMessage = memo(UserMessageImpl);
             ))}
           </div>
         ) : null}
-        {message.content ? (
+        {message.content || attachments.length > 0 ? (
           <div className="user-text-wrap">
             {isDesignSystemWorkspaceRequest ? (
               <UserStatusCard
                 title={t('chat.designSystemStatus.title')}
                 description={t('chat.designSystemStatus.description')}
               />
-            ) : (
+            ) : message.content ? (
               <UserBubble content={displayContent} t={t} />
-            )}
+            ) : null}
             <div className="user-actions">
               {/* 稿子**渲染出来**是「时间 → 复制 → 重试」(它的说明文字写的是「时间在最右」,
                   和自己的 DOM 打架;用户 2026-08-26 指认以渲染为准)。
                   时间不是动作,所以不给按钮那套 30px 命中框。 */}
               {clock ? <span className="user-actions-time">{clock}</span> : null}
-              <button
+              {message.content ? <button
                 type="button"
                 className="ghost user-copy-btn"
                 onClick={handleCopy}
@@ -6730,7 +6761,16 @@ const UserMessage = memo(UserMessageImpl);
                 title={copied ? t('chat.copyDone') : t('chat.copyPrompt')}
               >
                 <Icon name={copied ? 'check' : 'copy'} size={16} />
-              </button>
+              </button> : null}
+              {onForkProject ? (
+                <ForkProjectAction
+                  busy={forkProjectBusy}
+                  disabled={forkProjectDisabled}
+                  label={t('chat.forkProject')}
+                  busyLabel={t('chat.forkProjectBusy')}
+                  onClick={() => onForkProject(message)}
+                />
+              ) : null}
               {/* 发送失败那颗「重试」(稿子第 49 / 50 格的 `.msg-act .keep`):
                   和时间 / 复制**同一行**,但不跟着 hover 出没 —— 第 50 格的状态名
                   写的就是「时间与复制浮出,重试常驻」。 */}

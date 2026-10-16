@@ -40,6 +40,9 @@ import {
   automaticStrategyTaskProfileForProjectMetadata,
   defaultScenarioPluginIdForProjectMetadata,
   type ChatSessionMode,
+  type ForkProjectRequest,
+  type ForkProjectResponse,
+  type InstalledPluginRecord,
   type LocalCatalogScope,
   type PluginManifest,
   type PreviewComment,
@@ -85,6 +88,7 @@ import {
   FIRST_PARTY_ATOMS,
   buildConnectorProbe,
   getInstalledPlugin,
+  getSnapshot,
   listInstalledPlugins,
   automaticScenarioTaskProfile,
   createAutomaticProjectStrategyBinding,
@@ -104,9 +108,12 @@ import { listSkills } from '../../skills.js';
 import { isSafeId } from '../../projects.js';
 import {
   ensureTeamProjectCommentConversations,
+  getConversation,
+  getMessage,
   getFirstProjectConversation,
   SYNC_KEEPS_UPDATED_AT,
 } from '../../db.js';
+import { copyForkAttachments, projectForkMetadata, ProjectForkError } from '../../projects/fork.js';
 import {
   BUILT_IN_PROJECT_LOCATION_ID,
   allProjectLocations,
@@ -4704,6 +4711,135 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
     }
   });
 
+  app.post('/api/projects/:id/fork', async (req, res) => {
+    let preparedProjectId: string | null = null;
+    try {
+      const source = getProject(db, req.params.id);
+      const locations = await configuredProjectLocations();
+      if (!source || !projectVisibleForLocations(source, locations)) {
+        return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
+      }
+      const home = await resolveCreatedProjectHome(req);
+      reconcileUnboundProjectBeforeMutation(req, source.id, home);
+      if (!await enforceWorkspaceProjectMutation(
+        req, res, sendApiError, getWorkspaceProject, getWorkspaceProjectByProjectId,
+        db, source.id, 'duplicate',
+      )) return;
+      const input = req.body as ForkProjectRequest | undefined;
+      if (
+        !input || typeof input.sourceConversationId !== 'string' || !input.sourceConversationId
+        || typeof input.sourceMessageId !== 'string' || !input.sourceMessageId
+        || (input.prompt !== undefined && typeof input.prompt !== 'string')
+        || (input.name !== undefined && typeof input.name !== 'string')
+      ) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'sourceConversationId and sourceMessageId are required; name and prompt must be strings');
+      }
+      const conversation = getConversation(db, input.sourceConversationId);
+      const message = conversation && conversation.projectId === source.id
+        ? getMessage(db, input.sourceMessageId, conversation.id)
+        : null;
+      if (!conversation || !message || message.role !== 'user') {
+        return sendApiError(res, 404, 'FORK_MESSAGE_NOT_FOUND', 'The saved user message was not found in this project. Reload the conversation and try again.');
+      }
+      if (isDesignSystemLikeProject(source)) {
+        return sendApiError(res, 400, 'PROJECT_ALREADY_DESIGN_SYSTEM', 'project is already a design-system workspace');
+      }
+
+      const snapshot = source.appliedPluginSnapshotId
+        ? getSnapshot(db, source.appliedPluginSnapshotId)
+        : null;
+      if (source.appliedPluginSnapshotId && !snapshot) {
+        throw new ProjectForkError('FORK_PLUGIN_UNAVAILABLE', 'The selected plugin is unavailable. Reapply it to the source project before forking.', 409);
+      }
+      const pluginScope = home
+        ? { workspaceId: home.workspaceId, workspaceMemberId: home.workspaceMemberId }
+        : { workspaceId: null, workspaceMemberId: null };
+      const plugin = snapshot
+        ? (ctx.pluginScope
+          ? await ctx.pluginScope.getPlugin(snapshot.pluginId, pluginScope)
+          : getInstalledPlugin(db, snapshot.pluginId)) as InstalledPluginRecord | null
+        : null;
+      if (snapshot && !plugin) {
+        throw new ProjectForkError('FORK_PLUGIN_UNAVAILABLE', 'The selected plugin is unavailable. Reapply it to the source project before forking.', 409);
+      }
+      const registry = plugin ? await loadPluginRegistryView(localPluginRegistryScope(plugin) ?? pluginScope) : null;
+      const metadata = projectForkMetadata(source);
+      const strategy = readVerifiedProjectStrategyBinding(source.metadata);
+      if (strategy) {
+        const binding = createAutomaticProjectStrategyBinding({ metadata, taskProfile: strategy.taskProfile });
+        if (binding) metadata.strategyBinding = binding;
+      }
+      const sourceBinding = readVerifiedProjectScenarioBinding(db, {
+        projectId: source.id,
+        appliedPluginSnapshotId: source.appliedPluginSnapshotId,
+        metadata: source.metadata,
+      });
+      const targetId = randomId();
+      const conversationId = randomId();
+      preparedProjectId = targetId;
+      await ensureProject(PROJECTS_DIR, targetId);
+      const copied = await copyForkAttachments(PROJECTS_DIR, source, targetId, message.attachments ?? []);
+      metadata.pendingAttachments = copied.attachments;
+      metadata.pendingDraftConversationId = conversationId;
+      const now = Date.now();
+      const project = db.transaction(() => {
+        insertProject(db, {
+          id: targetId,
+          name: (input.name?.trim() || `${source.name?.trim() || 'Untitled'} Fork`).slice(0, 160),
+          skillId: source.skillId ?? null,
+          designSystemId: source.designSystemId ?? null,
+          pendingPrompt: input.prompt ?? message.content,
+          customInstructions: source.customInstructions ?? null,
+          metadata,
+          createdAt: now,
+          updatedAt: now,
+        });
+        insertConversation(db, {
+          id: conversationId, projectId: targetId, title: null,
+          sessionMode: normalizeChatSessionMode(message.sessionMode ?? conversation.sessionMode),
+          createdAt: now, updatedAt: now,
+        });
+        bindDuplicateIntoRequestWorkspace(home, targetId, now);
+        if (snapshot && plugin && registry) {
+          // Resolve by plugin + inputs: passing the OLD snapshot id would move
+          // its project_id and let deleting the fork destroy the source pin.
+          const resolved = resolvePluginSnapshot({
+            db, projectId: targetId, conversationId, plugin, registry,
+            body: { pluginId: plugin.id, pluginInputs: snapshot.inputs, grantCaps: snapshot.capabilitiesGranted },
+            connectorProbe: buildConnectorProbe(connectorService),
+            ...(source.designSystemId ? { activeProjectDesignSystem: { id: source.designSystemId } } : {}),
+            projectBinding: {
+              provenance: sourceBinding?.provenance ?? 'legacy_unknown',
+              ...(sourceBinding?.taskProfile ? { taskProfile: sourceBinding.taskProfile } : {}),
+            },
+          });
+          if (!resolved?.ok) {
+            throw new ProjectForkError('FORK_PLUGIN_UNAVAILABLE', 'The selected plugin could not be applied to the new project. Reapply it to the source project before forking.', 409);
+          }
+        }
+        return getProject(db, targetId);
+      })();
+      preparedProjectId = null;
+      const body: ForkProjectResponse = {
+        project: home ? { ...project, workspaceId: home.workspaceId } : project,
+        conversationId,
+        copiedFiles: copied.copiedFiles,
+      };
+      res.status(201).json(body);
+    } catch (error) {
+      if (preparedProjectId) await removeProjectDir(PROJECTS_DIR, preparedProjectId).catch(() => {});
+      if (error instanceof ProjectForkError) {
+        return sendApiError(res, error.status, error.code, error.message,
+          error.attachmentName ? { details: { attachmentName: error.attachmentName } } : {});
+      }
+      if (error instanceof CreatedProjectWorkspaceResolutionError) {
+        return sendApiError(res, error.status, error.code, error.message);
+      }
+      console.warn('[projects] fork failed', error);
+      sendApiError(res, 500, 'FORK_FAILED', 'Could not create the new project. Please try again.');
+    }
+  });
+
   app.post('/api/projects/:id/duplicate', async (req, res) => {
     const sourceProject = getProject(db, req.params.id);
     try {
@@ -5443,6 +5579,13 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
             );
           }
         }
+      }
+      // A fork's text and attachment seed are one handoff. Clear both in the
+      // same write after the composer has durably stored its editable draft.
+      if (patch.pendingPrompt === null && patchProject.metadata?.pendingDraftConversationId) {
+        patch.metadata = { ...(patch.metadata ?? patchProject.metadata) };
+        delete patch.metadata.pendingAttachments;
+        delete patch.metadata.pendingDraftConversationId;
       }
       const project = updateProject(db, req.params.id, patch);
       if (!project)

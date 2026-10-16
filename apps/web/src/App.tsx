@@ -27,6 +27,7 @@ import type {
   AmrModelsResponse,
   ChatSessionMode,
   CreateProjectExampleReference,
+  ForkProjectRequest,
   LocalCatalogScope,
   RunContextSelection,
   TeamProject,
@@ -221,6 +222,7 @@ import {
   createPluginShareProject,
   deleteProject as deleteProjectApi,
   duplicateProject,
+  forkProject,
   getProject,
   importClaudeDesignZip,
   importFolderProject,
@@ -3623,6 +3625,19 @@ function AppInner() {
     [refreshDesignSystems, rememberLocalProject, resolveSourceProjectWorkspaceContext],
   );
 
+  const handleForkProject = useCallback(
+    async (sourceProjectId: string, input: ForkProjectRequest) => {
+      const context = await resolveSourceProjectWorkspaceContext(sourceProjectId);
+      const result = await forkProject(sourceProjectId, input, context);
+      rememberLocalProject(result.project.id);
+      setProjects((current) => [result.project, ...current.filter((item) => item.id !== result.project.id)]);
+      const projectRoute = { kind: 'project', projectId: result.project.id, conversationId: result.conversationId, fileName: null } as const;
+      openWorkspaceTab(projectRoute);
+      navigate(projectRoute);
+    },
+    [rememberLocalProject, resolveSourceProjectWorkspaceContext],
+  );
+
   const handleDuplicateProject = useCallback(
     async (sourceProjectId: string, input: { name?: string } = {}) => {
       const sourceWorkspaceContext =
@@ -4279,18 +4294,24 @@ function AppInner() {
   const handleClearPendingPrompt = useCallback(() => {
     const projectId = route.kind === 'project' ? route.projectId : null;
     if (!projectId) return;
+    const clearDraft = (project: Project): Project => {
+      if (project.id !== projectId) return project;
+      const metadata = project.metadata ? { ...project.metadata } : undefined;
+      if (metadata) {
+        delete metadata.pendingAttachments;
+        delete metadata.pendingDraftConversationId;
+      }
+      return { ...project, pendingPrompt: undefined, metadata };
+    };
     setProjects((curr) =>
-      curr.map((p) =>
-        p.id === projectId ? { ...p, pendingPrompt: undefined } : p,
-      ),
+      curr.map(clearDraft),
     );
     const mutationContext = workspaceContextRef.current;
     if (mutationContext) {
       patchProjectDisplaySnapshots({
         accountGeneration: currentWorkspaceAccountGeneration(),
         context: mutationContext,
-        patch: (cachedProjects) => cachedProjects.map((project) =>
-          project.id === projectId ? { ...project, pendingPrompt: undefined } : project),
+        patch: (cachedProjects) => cachedProjects.map(clearDraft),
       });
     }
     void patchProject(projectId, { pendingPrompt: null }, mutationContext);
@@ -5583,6 +5604,7 @@ function AppInner() {
           onDesignSystemsRefresh={refreshDesignSystems}
           onCreateProjectFromDesignSystem={handleCreateProjectFromDesignSystem}
           onCreateDesignSystemFromProject={handleCreateDesignSystemFromProject}
+          onForkProject={handleForkProject}
           onDuplicateProject={handleDuplicateProject}
           onRunActivityChange={handleProjectRunActivityChange}
           creationHandoff={

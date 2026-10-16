@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRunStatus, ChatSessionMode } from './chat.js';
+import type { ChatAttachment, ChatMessage, ChatRunStatus, ChatSessionMode } from './chat.js';
 import type { OrchestratorWorkspace } from './workspaces.js';
 import type {
   ProjectContextConnectorRef,
@@ -193,6 +193,10 @@ export interface DesignSystemReviewEntry {
 
 export interface ProjectMetadata {
   kind: ProjectKind;
+  /** Fork attachments awaiting a durable, editable composer draft. */
+  pendingAttachments?: ChatAttachment[];
+  /** The only conversation allowed to consume a fork's pending draft. */
+  pendingDraftConversationId?: string;
   // `live-artifact`: the data-backed live dashboard flow (drives the
   // live-artifact skill/system-prompt path). `web-clone`: website reproduction
   // projects from the Home `Website clone` card — stored as prototypes so they
@@ -688,6 +692,19 @@ export interface DuplicateProjectRequest {
 }
 
 export interface DuplicateProjectResponse extends ProjectResponse {
+  conversationId: string;
+  copiedFiles: string[];
+}
+
+export interface ForkProjectRequest {
+  sourceConversationId: string;
+  sourceMessageId: string;
+  name?: string;
+  /** Omit to copy the source message verbatim; an empty string is allowed. */
+  prompt?: string;
+}
+
+export interface ForkProjectResponse extends ProjectResponse {
   conversationId: string;
   copiedFiles: string[];
 }

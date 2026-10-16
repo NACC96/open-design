@@ -25,7 +25,7 @@
 
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatMessage } from '@open-design/contracts';
+import type { ChatMessage, ForkProjectRequest } from '@open-design/contracts';
 import { ProjectView } from '../../src/components/ProjectView';
 import { foldStrategyTaskTurns } from '../../src/components/ChatPane';
 
@@ -56,6 +56,8 @@ const saveTabs = vi.fn();
 
 const chatPaneProps: {
   onForkFromMessage?: (message: ChatMessage) => Promise<void> | void;
+  onForkProject?: (message: ChatMessage) => Promise<void> | void;
+  forkingProjectMessageId?: string | null;
   messages?: ChatMessage[];
 } = {};
 
@@ -135,9 +137,13 @@ vi.mock('../../src/components/ChatPane', async (importOriginal) => {
     ...actual,
     ChatPane: (props: {
       onForkFromMessage?: (message: ChatMessage) => Promise<void> | void;
+      onForkProject?: (message: ChatMessage) => Promise<void> | void;
+      forkingProjectMessageId?: string | null;
       messages?: ChatMessage[];
     }) => {
       chatPaneProps.onForkFromMessage = props.onForkFromMessage;
+      chatPaneProps.onForkProject = props.onForkProject;
+      chatPaneProps.forkingProjectMessageId = props.forkingProjectMessageId;
       chatPaneProps.messages = props.messages;
       return null;
     },
@@ -224,7 +230,7 @@ const TRANSCRIPT: ChatMessage[] = [
   },
 ];
 
-function renderProjectView() {
+function renderProjectView(onForkProject?: (projectId: string, input: ForkProjectRequest) => Promise<void>) {
   return render(
     <ProjectView
       project={{ id: 'project-1', name: 'Project', skillId: null, designSystemId: null } as never}
@@ -245,6 +251,7 @@ function renderProjectView() {
       onTouchProject={() => {}}
       onProjectChange={() => {}}
       onProjectsRefresh={() => {}}
+      onForkProject={onForkProject}
     />,
   );
 }
@@ -272,6 +279,8 @@ describe('ProjectView fork from a folded OD Next turn', () => {
     cleanup();
     vi.clearAllMocks();
     chatPaneProps.onForkFromMessage = undefined;
+    chatPaneProps.onForkProject = undefined;
+    chatPaneProps.forkingProjectMessageId = undefined;
     chatPaneProps.messages = undefined;
   });
 
@@ -283,6 +292,29 @@ describe('ProjectView fork from a folded OD Next turn', () => {
     // 三个 run 的正文都在这一条里 —— 屏幕上「对话末尾」就是它。
     expect(assistants[0]!.content).toContain('Slide count reads 17');
     expect(assistants[0]!.runId).toBe('2518cf42-0368-4625-8bda-b0dac207a060');
+  });
+
+  it('forks only a persisted user brief and admits one request while copying', async () => {
+    let finish!: () => void;
+    const onForkProject = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    renderProjectView(onForkProject);
+    await waitFor(() => expect(chatPaneProps.messages?.length).toBe(TRANSCRIPT.length));
+    const user = TRANSCRIPT.find((message) => message.role === 'user')!;
+    await act(async () => {
+      await chatPaneProps.onForkProject?.({ ...user, id: 'not-saved' });
+    });
+    expect(onForkProject).not.toHaveBeenCalled();
+    let first: Promise<void> | void;
+    await act(async () => {
+      first = chatPaneProps.onForkProject?.(user);
+      await chatPaneProps.onForkProject?.(user);
+    });
+    expect(onForkProject).toHaveBeenCalledTimes(1);
+    expect(onForkProject).toHaveBeenCalledWith('project-1', { sourceConversationId: 'conv-1', sourceMessageId: user.id });
+    expect(chatPaneProps.forkingProjectMessageId).toBe(user.id);
+    await act(async () => { finish(); await first; });
+    expect(chatPaneProps.forkingProjectMessageId).toBeNull();
+    expect(createConversation).not.toHaveBeenCalled();
   });
 
   it('在折叠回合末尾分叉要带上整条逻辑回合,而不是切在第一个 run', async () => {

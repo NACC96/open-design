@@ -39,6 +39,9 @@ import type { ChatQuote } from './quote-selection';
 
 /** 一次待发送负载里除正文以外的部分。 */
 export interface ComposerDraftExtras {
+  /** Forks must retain every copied attachment, including an intentionally
+   * emptied list. This also witnesses that the pending seed was consumed. */
+  preserveAttachments?: true;
   attachments: ChatAttachment[];
   commentAttachments: ChatCommentAttachment[];
   quotes: ChatQuote[];
@@ -82,7 +85,7 @@ const EMPTY_EXTRAS: ComposerDraftExtras = {
 
 /** 空负载不落盘 —— 存一个 `{}` 只会让「从没存过」和「存过但是空的」分不开。 */
 export function composerDraftExtrasAreEmpty(extras: ComposerDraftExtras): boolean {
-  return extras.attachments.length === 0
+  return !extras.preserveAttachments && extras.attachments.length === 0
     && extras.commentAttachments.length === 0
     && extras.quotes.length === 0
     && extras.context.skillIds.length === 0
@@ -103,7 +106,7 @@ function stringArray(raw: unknown, limit: number): string[] {
 }
 
 /** 附件必须有 path 和 name;`kind` 只认两个值,别的当 `file`。 */
-function sanitizeAttachments(raw: unknown): ChatAttachment[] {
+function sanitizeAttachments(raw: unknown, preserveAll = false): ChatAttachment[] {
   if (!Array.isArray(raw)) return [];
   const out: ChatAttachment[] = [];
   for (const item of raw) {
@@ -119,7 +122,7 @@ function sanitizeAttachments(raw: unknown): ChatAttachment[] {
       ...(typeof row.size === 'number' && Number.isFinite(row.size) ? { size: row.size } : {}),
       ...(typeof row.order === 'number' && Number.isFinite(row.order) ? { order: row.order } : {}),
     });
-    if (out.length >= DRAFT_MAX_ATTACHMENTS) break;
+    if (!preserveAll && out.length >= DRAFT_MAX_ATTACHMENTS) break;
   }
   return out;
 }
@@ -191,7 +194,8 @@ export function sanitizeComposerDraftExtras(raw: unknown): ComposerDraftExtras {
   const row = raw as Record<string, unknown>;
   const context = (row.context && typeof row.context === 'object' ? row.context : {}) as Record<string, unknown>;
   return {
-    attachments: sanitizeAttachments(row.attachments),
+    ...(row.preserveAttachments === true ? { preserveAttachments: true as const } : {}),
+    attachments: sanitizeAttachments(row.attachments, row.preserveAttachments === true),
     commentAttachments: sanitizeCommentAttachments(row.commentAttachments),
     quotes: sanitizeQuotes(row.quotes),
     context: {
@@ -209,6 +213,9 @@ export function sanitizeComposerDraftExtras(raw: unknown): ComposerDraftExtras {
  * 一个字都不写 —— 写半份坏数据比不写更糟。
  */
 export function serializeComposerDraftExtras(extras: ComposerDraftExtras): string | null {
+  // A fork is an explicit copy operation. Never shed its attachments to meet
+  // the convenience-draft budget; a storage failure leaves its server seed intact.
+  if (extras.preserveAttachments) return JSON.stringify(extras);
   const shedOrder: Array<(current: ComposerDraftExtras) => ComposerDraftExtras> = [
     (current) => current,
     (current) => ({ ...current, commentAttachments: [] }),
@@ -241,15 +248,17 @@ export function loadComposerDraftExtras(key?: string): ComposerDraftExtras {
   }
 }
 
-export function saveComposerDraftExtras(key: string | undefined, extras: ComposerDraftExtras): void {
-  if (!key || typeof window === 'undefined') return;
+export function saveComposerDraftExtras(key: string | undefined, extras: ComposerDraftExtras): boolean {
+  if (!key || typeof window === 'undefined') return false;
   const storageKey = composerDraftExtrasKey(key);
   const encoded = serializeComposerDraftExtras(sanitizeComposerDraftExtras(extras));
   try {
     if (encoded) window.localStorage.setItem(storageKey, encoded);
     else window.localStorage.removeItem(storageKey);
+    return true;
   } catch {
     // 隐私模式 / 配额满 —— 存不下不影响输入框继续用。
+    return false;
   }
 }
 

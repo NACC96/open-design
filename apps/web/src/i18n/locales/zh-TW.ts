@@ -2303,6 +2303,12 @@ export const zhTW: Dict = {
   "chat.deleteConversationConfirm": "確定刪除「{title}」？該操作會刪除其訊息。",
   "chat.untitledConversation": "未命名對話",
   "chat.forkConversationFailed": "無法開始新會話。",
+  "chat.forkProject": "分支到新專案",
+  "chat.forkProjectBusy": "正在建立專案…",
+  "chat.forkProjectFailed": "無法建立新專案，請重試。",
+  "chat.forkProjectAttachmentUnavailable": "無法複製「{name}」。請在原專案中還原或重新附加該檔案後重試。",
+  "chat.forkProjectMessageUnavailable": "找不到已儲存的訊息，請重新載入對話後重試。",
+  "chat.forkProjectPluginUnavailable": "所選外掛程式無法使用，請在原專案中重新套用後重試。",
   "chat.startTitle": "開始一個對話",
   "chat.startHint": "描述你想生成的內容，或從下面的範例開始：",
   "chat.brandBrowserAssistDesktopOnly":
