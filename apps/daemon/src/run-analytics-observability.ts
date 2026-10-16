@@ -530,7 +530,7 @@ function laterThan(a: number | undefined, b: number | undefined): boolean {
   return a !== undefined && (b === undefined || a >= b);
 }
 
-interface UsageCacheFields {
+export interface UsageCacheFields {
   inputTokens: number | undefined;
   outputTokens: number | undefined;
   totalTokens: number | undefined;
@@ -545,7 +545,7 @@ interface UsageCacheFields {
 // usage through this so their effective-input denominators — and therefore
 // `cache_hit_ratio` vs `first_call_cache_hit_ratio` — can never drift apart as
 // new aliases are added.
-function extractUsageCacheFields(usage: Record<string, unknown>): UsageCacheFields {
+export function extractUsageCacheFields(usage: Record<string, unknown>): UsageCacheFields {
   const inputTokens = firstNumber(usage, [
     'input_tokens',
     'prompt_tokens',

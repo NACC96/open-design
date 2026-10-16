@@ -168,6 +168,7 @@ import { PrivacySection } from './PrivacySection';
 import { ProjectLocationsSection } from './ProjectLocationsSection';
 import { RoutinesSection } from './RoutinesSection';
 import { SettingsWorkspaceSection } from './SettingsWorkspaceSection';
+import { ModelPriceOverridesSection } from './spend/ModelPriceOverridesSection';
 import {
   useWorkspaceBillingResponse,
   useWorkspaceContext,
@@ -5868,6 +5869,7 @@ export function SettingsDialog({
               ) : null}
             </section>
           )}
+              <ModelPriceOverridesSection />
             </>
           ) : null}
 

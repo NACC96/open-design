@@ -1,4 +1,5 @@
 import type http from 'node:http';
+import type { ProjectSpendResponse } from '@open-design/contracts';
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import {
@@ -1038,6 +1039,68 @@ process.stdin.on('end', () => {
     } finally {
       verifyDb.close();
     }
+  });
+
+  it('records a chat turn\'s usage, model, and reported cost for project spend', async () => {
+    if (!process.env.OD_DATA_DIR) {
+      throw new Error('OD_DATA_DIR is required for project spend tests');
+    }
+    const projectId = `proj-${randomUUID()}`;
+    const assistantMessageId = `assistant-${randomUUID()}`;
+    const createProjectResponse = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: projectId, name: 'Project spend fixture' }),
+    });
+    expect(createProjectResponse.ok).toBe(true);
+    const conversationsBody = await (await fetch(`${baseUrl}/api/projects/${projectId}/conversations`)).json() as {
+      conversations: Array<{ id: string }>;
+    };
+    const conversationId = conversationsBody.conversations[0]?.id;
+    expect(conversationId).toBeTruthy();
+    const sqlite = new Database(resolve(process.env.OD_DATA_DIR, 'app.sqlite'));
+    try {
+      upsertMessage(sqlite as never, conversationId!, { id: assistantMessageId, role: 'assistant', content: '' });
+    } finally {
+      sqlite.close();
+    }
+
+    await withFakeAgent(
+      'opencode',
+      `
+process.stdin.resume();
+process.stdin.on('end', () => {
+  console.log(JSON.stringify({ type: 'step_start' }));
+  console.log(JSON.stringify({ type: 'step_finish', part: { cost: 0.002, tokens: { input: 1000, output: 100, cache: { read: 400, write: 0 } } } }));
+  console.log(JSON.stringify({ type: 'text', part: { text: 'spend-recorded-ok' } }));
+  console.log(JSON.stringify({ type: 'step_finish', part: { cost: 0.003, tokens: { input: 2000, output: 200, cache: { read: 1500, write: 0 } } } }));
+  process.exit(0);
+});
+`,
+      async () => {
+        const response = await fetch(`${baseUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 'opencode',
+            model: 'openai/gpt-5',
+            projectId,
+            conversationId,
+            assistantMessageId,
+            message: 'build it',
+          }),
+        });
+        expect(response.ok).toBe(true);
+        expect(await response.text()).toContain('spend-recorded-ok');
+      },
+    );
+
+    const spend = await (await fetch(`${baseUrl}/api/projects/${projectId}/spend`)).json() as ProjectSpendResponse;
+    expect(spend.total).toMatchObject({ turns: 1, pricedTurns: 1, reportedTurns: 1, estimatedTurns: 0 });
+    expect(spend.total.costUsd).toBeCloseTo(0.005, 10);
+    // OpenCode usage is inclusive: cache reads are part of input_tokens.
+    expect(spend.total.tokens).toEqual({ input: 1100, output: 300, cacheRead: 1900, cacheWrite: 0 });
+    expect(spend.byModel[0]).toMatchObject({ model: 'gpt-5', agentIds: ['opencode'] });
   });
 
   it('does not leave a pinned assistant message queued when legacy chat fails before spawning', async () => {

@@ -1,0 +1,239 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import {
+  closeDatabase,
+  insertConversation,
+  insertProject,
+  openDatabase,
+  upsertAgentSession,
+  upsertMessage,
+} from '../../src/db.js';
+import { computeProjectSpend } from '../../src/spend/project-spend.js';
+import { recordRunUsageEvent, type RunUsageRunState } from '../../src/spend/run-usage-recorder.js';
+
+describe('project spend', () => {
+  let tempDir: string;
+  let runsLogDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(path.join(os.tmpdir(), 'od-project-spend-'));
+    runsLogDir = path.join(tempDir, 'runs');
+    mkdirSync(runsLogDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    closeDatabase();
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function seed() {
+    const db = openDatabase(tempDir, { dataDir: tempDir });
+    const now = Date.now();
+    insertProject(db, { id: 'proj-1', name: 'P', createdAt: now, updatedAt: now });
+    insertProject(db, { id: 'proj-2', name: 'Other', createdAt: now, updatedAt: now });
+    for (const [id, projectId, title] of [
+      ['conv-1', 'proj-1', 'Landing page'],
+      ['conv-2', 'proj-1', 'Pricing table'],
+      ['conv-other', 'proj-2', 'Elsewhere'],
+    ] as const) {
+      insertConversation(db, { id, projectId, title, createdAt: now, updatedAt: now });
+    }
+    return db;
+  }
+
+  function assistant(db: ReturnType<typeof seed>, conversationId: string, id: string, extra: Record<string, unknown> = {}) {
+    upsertMessage(db, conversationId, { id, role: 'assistant', content: 'x', ...extra });
+  }
+
+  function liveRun(db: ReturnType<typeof seed>, run: RunUsageRunState, events: Array<[string, unknown]>) {
+    for (const [event, data] of events) recordRunUsageEvent(db, run, event, data);
+  }
+
+  const claudeTurn: Array<[string, unknown]> = [
+    ['start', {}],
+    ['agent', { type: 'status', label: 'initializing', model: 'claude-sonnet-4-5-20250929' }],
+    ['agent', { type: 'text_delta', delta: 'hello' }],
+    ['agent', {
+      type: 'usage',
+      usage: { input_tokens: 1000, output_tokens: 2000, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 0 },
+      costUsd: 0.5,
+      costScope: 'process_cumulative',
+    }],
+  ];
+
+  const codexTurn: Array<[string, unknown]> = [
+    ['start', {}],
+    ['agent', {
+      type: 'usage',
+      usageScope: 'sessionCumulative',
+      usage: { input_tokens: 9_000_000, output_tokens: 9_000_000 },
+      turnTokenUsage: { input: 1_000_000, cachedInput: 800_000, cacheWrite: 0, output: 100_000, reasoning: 20_000 },
+    }],
+  ];
+
+  it('prices live-recorded turns and rolls them up by model and conversation', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-claude');
+    assistant(db, 'conv-2', 'msg-codex');
+    assistant(db, 'conv-other', 'msg-other');
+    liveRun(db, { id: 'run-claude', assistantMessageId: 'msg-claude', agentId: 'claude', model: 'default' }, claudeTurn);
+    liveRun(db, { id: 'run-codex', assistantMessageId: 'msg-codex', agentId: 'codex', model: 'gpt-5.5', launchModel: 'gpt-5.5' }, codexTurn);
+    liveRun(db, { id: 'run-other', assistantMessageId: 'msg-other', agentId: 'claude' }, claudeTurn);
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir, now: 42 });
+
+    // Codex at gpt-5.5 ($5 in / $0.50 cached / $30 out): 200K uncached + 800K cached + 100K out.
+    const codexCost = 0.2 * 5 + 0.8 * 0.5 + 0.1 * 30;
+    expect(spend.total.turns).toBe(2);
+    expect(spend.total.pricedTurns).toBe(2);
+    expect(spend.total.reportedTurns).toBe(1);
+    expect(spend.total.costUsd).toBeCloseTo(0.5 + codexCost, 10);
+    expect(spend.total.tokens).toEqual({ input: 201_000, output: 102_000, cacheRead: 810_000, cacheWrite: 0 });
+    expect(spend.generatedAt).toBe(42);
+
+    expect(spend.byModel.map((row) => [row.model, row.agentIds, row.priceSource])).toEqual([
+      ['gpt-5.5', ['codex'], 'bundled'],
+      ['claude-sonnet-4-5', ['claude'], 'bundled'],
+    ]);
+    expect(spend.byConversation.map((row) => [row.title, row.turns])).toEqual([
+      ['Pricing table', 1],
+      ['Landing page', 1],
+    ]);
+  });
+
+  it('applies a price override only to turns whose agent did not report its own cost', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-claude');
+    assistant(db, 'conv-2', 'msg-codex');
+    liveRun(db, { id: 'run-claude', assistantMessageId: 'msg-claude', agentId: 'claude' }, claudeTurn);
+    liveRun(db, { id: 'run-codex', assistantMessageId: 'msg-codex', agentId: 'codex', launchModel: 'gpt-5.5' }, codexTurn);
+
+    const spend = await computeProjectSpend(db, 'proj-1', {
+      runsLogDir,
+      overrides: {
+        'claude-sonnet-4-5': { input: 1, output: 1, cacheRead: 0 },
+        'openai/gpt-5.5': { input: 1, output: 10, cacheRead: 0.1 },
+      },
+    });
+    // Claude reported $0.50 for the turn; its sub-agent work is in that figure, not in its tokens.
+    const claude = spend.byModel.find((row) => row.model === 'claude-sonnet-4-5');
+    expect(claude).toMatchObject({ reportedTurns: 1, costUsd: 0.5 });
+    const codex = spend.byModel.find((row) => row.model === 'gpt-5.5');
+    expect(codex?.priceSource).toBe('override');
+    expect(codex?.costUsd).toBeCloseTo(0.2 * 1 + 0.8 * 0.1 + 0.1 * 10, 10);
+  });
+
+  it('prices AMR turns at the catalog price frozen at launch', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-amr');
+    liveRun(db, {
+      id: 'run-amr',
+      assistantMessageId: 'msg-amr',
+      agentId: 'amr',
+      launchModel: 'deepseek-v4-pro',
+      launchModelPrice: { input: 2, output: 8 },
+    }, [
+      ['start', {}],
+      ['agent', { type: 'status', label: 'model', model: 'public_model_deepseek_v4_pro' }],
+      ['agent', { type: 'usage', usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 } }],
+    ]);
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total.costUsd).toBeCloseTo(10, 10);
+    expect(spend.byModel[0]).toMatchObject({ model: 'deepseek-v4-pro', priceSource: 'catalog' });
+  });
+
+  it('keeps the catalog price when the agent reports the launch model under a table-known id', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-amr');
+    liveRun(db, {
+      id: 'run-amr',
+      assistantMessageId: 'msg-amr',
+      agentId: 'amr',
+      launchModel: 'deepseek-v4-pro',
+      launchModelPrice: { input: 2, output: 8 },
+    }, [
+      ['agent', { type: 'status', label: 'model', model: 'vela/deepseek-v4-pro' }],
+      ['agent', { type: 'usage', usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 } }],
+    ]);
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.byModel[0]).toMatchObject({ model: 'deepseek-v4-pro', priceSource: 'catalog' });
+    expect(spend.total.costUsd).toBeCloseTo(10, 10);
+  });
+
+  it('counts unknown models as unpriced instead of guessing', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-local');
+    liveRun(db, { id: 'run-local', assistantMessageId: 'msg-local', agentId: 'opencode', launchModel: 'ollama/my-llama' }, [
+      ['agent', { type: 'usage', usage: { input_tokens: 500, output_tokens: 50 } }],
+    ]);
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total).toMatchObject({ turns: 1, pricedTurns: 0, unpricedTurns: 1, costUsd: 0 });
+    expect(spend.byModel[0]).toMatchObject({ model: 'my-llama', price: null, priceSource: null });
+  });
+
+  it('skips turns that never consumed tokens', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-failed');
+    liveRun(db, { id: 'run-failed', assistantMessageId: 'msg-failed', agentId: 'claude' }, [['start', {}]]);
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total.turns).toBe(0);
+    expect(spend.byModel).toEqual([]);
+  });
+
+  it('backfills older turns by replaying their durable run log', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-old', { runId: 'run-old', agentId: 'codex' });
+    const runDir = path.join(runsLogDir, 'run-old');
+    mkdirSync(runDir);
+    writeFileSync(path.join(runDir, 'state.json'), JSON.stringify({ id: 'run-old', agentId: 'codex', model: 'default', resolvedModelId: 'gpt-5.4' }));
+    writeFileSync(path.join(runDir, 'events.jsonl'), [...codexTurn.map(([event, data], i) => JSON.stringify({ id: i + 1, event, data })), '{"torn'].join('\n'));
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total).toMatchObject({ turns: 1, pricedTurns: 1, estimatedTurns: 0 });
+    // gpt-5.4: $2.50 in / $0.25 cached / $15 out.
+    expect(spend.total.costUsd).toBeCloseTo(0.2 * 2.5 + 0.8 * 0.25 + 0.1 * 15, 10);
+    expect(spend.byModel[0]?.model).toBe('gpt-5.4');
+
+    // The backfill is recorded once; a second read does not double count.
+    const again = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(again.total.turns).toBe(1);
+  });
+
+  it('reconstructs turns without a run log from persisted message events, flagged estimated', async () => {
+    const db = seed();
+    // Two Codex turns on one resumed thread: persisted usage is the running thread total.
+    assistant(db, 'conv-1', 'msg-a', { agentId: 'codex', events: [{ kind: 'usage', inputTokens: 1000, outputTokens: 100 }] });
+    assistant(db, 'conv-1', 'msg-b', { agentId: 'codex', events: [
+      { kind: 'usage', inputTokens: 1200, outputTokens: 120 },
+      { kind: 'usage', inputTokens: 1500, outputTokens: 150 },
+    ] });
+    // A Claude turn whose model came from its init status and whose cost was reported.
+    assistant(db, 'conv-2', 'msg-c', { agentId: 'claude', events: [
+      { kind: 'status', label: 'initializing', detail: 'claude-opus-4-6' },
+      { kind: 'text', text: 'done' },
+      { kind: 'usage', inputTokens: 10, outputTokens: 20, costUsd: 0.25 },
+    ] });
+    upsertAgentSession(db, { conversationId: 'conv-1', agentId: 'codex', sessionId: 's', model: 'gpt-5.1' });
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total).toMatchObject({ turns: 3, pricedTurns: 3, estimatedTurns: 3, reportedTurns: 1 });
+    const codex = spend.byModel.find((row) => row.model === 'gpt-5.1');
+    // 1000 + (1500 - 1000) input, 100 + (150 - 100) output at $1.25 / $10.
+    expect(codex?.tokens).toMatchObject({ input: 1500, output: 150 });
+    expect(codex?.costUsd).toBeCloseTo((1500 * 1.25 + 150 * 10) / 1_000_000, 12);
+    expect(spend.byModel.find((row) => row.model === 'claude-opus-4-6')?.costUsd).toBeCloseTo(0.25, 10);
+  });
+
+  it('drops a conversation\'s spend with the conversation', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-claude');
+    liveRun(db, { id: 'run-claude', assistantMessageId: 'msg-claude', agentId: 'claude' }, claudeTurn);
+    db.prepare('DELETE FROM conversations WHERE id = ?').run('conv-1');
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total.turns).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM run_usage').get()).toEqual({ n: 0 });
+  });
+});

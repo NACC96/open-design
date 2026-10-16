@@ -1,3 +1,4 @@
+import type { ModelTokenPrice } from '../pricing/model-prices.js';
 import type { OdNextRolloutMode } from './strategy-rollout.js';
 
 export interface AgentModelPrefs {
@@ -93,6 +94,14 @@ export interface AppConfigPrefs {
    * most-recent-first and capped by the daemon.
    */
   recentLinkedDirs?: string[];
+  /**
+   * User price overrides for project spend estimates, keyed by model id (any
+   * spelling an agent reports; keys are normalized on lookup). An entry here
+   * outranks both the agent catalog's price and the bundled table, and adds
+   * prices for models the table does not know. It does not replace a cost the
+   * agent reported itself.
+   */
+  modelPriceOverrides?: Record<string, ModelTokenPrice>;
 }
 
 export interface AppConfigResponse {
