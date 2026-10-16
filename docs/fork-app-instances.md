@@ -159,9 +159,10 @@ restores the app but not the data. If the newer build migrated the database
 schema, the older app may not open that library correctly.
 
 Before replacing anything, rollback refuses if the namespace's launcher state
-can select a payload newer than the kept app. Clear the update cache through
-the app before retrying; the script does not rewrite launcher pointers. A
-legacy kept bundle without an updater opt-out is accepted, then its staged
+can select a cached payload newer than the kept app. Runtime pointers without
+a payload manifest do not prevent a restore. The script leaves cached payloads
+and launcher pointers unchanged. A legacy kept bundle without an updater opt-out
+is accepted, then its staged
 restore has updates disabled and is re-signed before installation. The kept
 copy remains unchanged. If the installed bundle is missing, the kept bundle
 supplies the namespace-root expectation.

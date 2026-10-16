@@ -20,6 +20,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from "node:url";
+import { resolveLauncherVersionPaths } from '../packages/launcher-proto/src/index.ts';
 
 import {
   assertDevPlanIsolated,
@@ -484,8 +485,12 @@ async function runInternal(context: ExecutionContext, action: InternalAction): P
       return;
     case 'assert-launcher-version': {
       const versions = await readLauncherVersions(identity, { namespaceBaseRoot: action.namespaceBaseRoot }, paths.home);
-      const newer = versions.find(version => compareVersions(version, action.version) > 0);
-      if (newer) throw new ForkAppError(`a newer launcher payload (${newer}) can override rollback ${action.version}; clear the update cache through the app before retrying`);
+      const root = path.dirname(action.namespaceBaseRoot ?? defaultNamespaceBaseRoot(paths.home, identity));
+      // The launcher also records versions of installed outer bundles. Without
+      // a payload manifest, its runtime pointer cannot delegate to that version.
+      const newer = versions.find(version => compareVersions(version, action.version) > 0
+        && existsSync(resolveLauncherVersionPaths({ root, channel: identity.channel, namespace: identity.namespace, version }).manifestPath));
+      if (newer) throw new ForkAppError(`a newer cached launcher payload (${newer}) can override rollback ${action.version}; refusing to restore a bundle that would not run`);
       return;
     }
     case 'disable-updates': {

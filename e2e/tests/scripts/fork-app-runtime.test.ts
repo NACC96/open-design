@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { resolveLauncherVersionPaths } from '../../../packages/launcher-proto/src/index.ts';
 
 import { readState, runInternal, withLock, writeState } from '../../../scripts/fork-app.ts';
 import { emptyState, forkInstanceIdentity, launcherRuntimePath, resolveForkAppsPaths, withInstallRecord } from '../../../scripts/lib/fork-app.ts';
@@ -84,10 +85,26 @@ describe('fork-app rollback launcher selection', () => {
     const runtime = launcherRuntimePath(paths.home, identity, namespaceBaseRoot);
     await mkdir(path.dirname(runtime), { recursive: true });
     await writeFile(runtime, JSON.stringify({ active: { version: '0.24.1-fork.2', generation: 1 } }));
+    const payload = resolveLauncherVersionPaths({ root: path.dirname(namespaceBaseRoot), channel: identity.channel, namespace: identity.namespace, version: '0.24.1-fork.2' });
+    await mkdir(payload.versionRoot, { recursive: true });
+    await writeFile(payload.manifestPath, '{}');
 
     await expect(runInternal({ paths, identity }, {
       type: 'assert-launcher-version', version: '0.24.1-fork.1', namespaceBaseRoot,
     })).rejects.toThrow(/newer.*payload|payload.*newer/i);
+  });
+
+  test.each([0, 1])('allows rollback when a newer runtime pointer has no cached payload (generation %i)', async (generation) => {
+    const paths = await fixture();
+    const identity = forkInstanceIdentity('stable');
+    const namespaceBaseRoot = path.join(paths.home, 'library-root');
+    const runtime = launcherRuntimePath(paths.home, identity, namespaceBaseRoot);
+    await mkdir(path.dirname(runtime), { recursive: true });
+    await writeFile(runtime, JSON.stringify({ active: { version: '0.24.1-fork.2', generation } }));
+
+    await expect(runInternal({ paths, identity }, {
+      type: 'assert-launcher-version', version: '0.24.1-fork.1', namespaceBaseRoot,
+    })).resolves.toBeUndefined();
   });
 });
 
