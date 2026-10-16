@@ -19,7 +19,8 @@ import { useWorkspaceContext } from '../collab/useWorkspaceContext';
 
 interface Props {
   skill: SkillSummary;
-  author?: string;
+  /** null omits attribution when the resource's author is unknown. */
+  author?: string | null;
   onBack: () => void;
   onUse?: () => void;
 }
@@ -163,11 +164,13 @@ export function SkillDetailView({
               </Button>
             ) : null}
           </div>
-          <p>
-            {t('skillDetail.providedBy', {
-              author: author ?? skillAuthor(skill, t('chat.you')),
-            })}
-          </p>
+          {author !== null ? (
+            <p>
+              {t('skillDetail.providedBy', {
+                author: author ?? skillAuthor(skill, t('chat.you')),
+              })}
+            </p>
+          ) : null}
         </div>
       </div>
 

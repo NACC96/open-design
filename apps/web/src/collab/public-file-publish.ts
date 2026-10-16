@@ -1,6 +1,5 @@
 import {
   PUBLIC_FILE_MANUAL_REVOKE_REQUIRED,
-  workspaceContextHasWorkspaceIdentity,
   type PublicFileManualRevokeRequiredData,
   type PublicProjectFilePublication,
   type WorkspaceCollabContext,
@@ -63,7 +62,12 @@ export function publicFileManualRevokePublication(
 export function canPublishPublicFile(
   context: WorkspaceCollabContext | null | undefined,
 ): boolean {
-  return workspaceContextHasWorkspaceIdentity(context);
+  // Fork (Local AI only): public links are hosted by Open Design Cloud, which
+  // this build does not offer — never render the entry point, even when a
+  // lingering Cloud session still resolves a workspace. Deploy targets the
+  // user configures themselves (Vercel, Cloudflare Pages, …) are unaffected.
+  void context;
+  return false;
 }
 
 /** Dict keys this module may return; keeps the i18n contract explicit. */

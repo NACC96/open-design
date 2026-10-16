@@ -1,9 +1,9 @@
-import { amrAgentDef } from './defs/amr.js';
+import { RETIRED_AGENT_IDS } from './local-ai-policy.js';
+export { RETIRED_AGENT_IDS } from './local-ai-policy.js';
 import { claudeAgentDef } from './defs/claude.js';
 import { codexAgentDef } from './defs/codex.js';
 import { devinAgentDef } from './defs/devin.js';
 import { opencodeAgentDef } from './defs/opencode.js';
-import { byokOpenCodeAgentDef } from './defs/byok-opencode.js';
 import { hermesAgentDef } from './defs/hermes.js';
 import { traeCliAgentDef } from './defs/trae-cli.js';
 import { grokBuildAgentDef } from './defs/grok-build.js';
@@ -36,14 +36,20 @@ import type { RuntimeAgentDef } from './types.js';
  * we ship", and the wrong list for anything that must hold everywhere. A local
  * profile id is required not to collide with one of these (see
  * `createLocalAgentDef`), so it is always an id we have never heard of.
+ *
+ * Fork (Local AI only): the Open Design Cloud runtime (`amr`, the `vela` CLI)
+ * and the hidden API-key runtime (`byok-opencode`) are deliberately NOT
+ * shipped. Their definitions stay under `./defs/` so upstream syncs merge
+ * cleanly, but nothing registers them: `/api/agents` never lists them, the
+ * detection pass never probes `vela`, and an explicit run request that still
+ * names either id resolves to "unknown agent" instead of spawning it.
+ * Persisted app defaults are normalized by the pure local AI policy.
  */
 export const SHIPPED_AGENT_DEFS: RuntimeAgentDef[] = [
-  amrAgentDef,
   claudeAgentDef,
   codexAgentDef,
   devinAgentDef,
   opencodeAgentDef,
-  byokOpenCodeAgentDef,
   hermesAgentDef,
   traeCliAgentDef,
   grokBuildAgentDef,
@@ -70,11 +76,14 @@ export const SHIPPED_AGENT_DEFS: RuntimeAgentDef[] = [
 export function readLocalAgentProfileDefs(
   baseDefs: RuntimeAgentDef[] = SHIPPED_AGENT_DEFS,
 ): RuntimeAgentDef[] {
-  return readLocalAgentProfileDefsFromFile(baseDefs);
+  return readLocalAgentProfileDefsFromFile(baseDefs).filter(
+    (def) => !RETIRED_AGENT_IDS.has(def.id),
+  );
 }
 
 export const AGENT_DEFS: RuntimeAgentDef[] = [
   ...SHIPPED_AGENT_DEFS,
+  // A local profile may not resurrect a retired id under its own name.
   ...readLocalAgentProfileDefs(SHIPPED_AGENT_DEFS),
 ];
 

@@ -9,6 +9,19 @@ import {
 } from '../../src/runtime/strategy-question-continuation';
 
 describe('question-form strategy continuation handle recovery', () => {
+  it.each(['amr', 'byok-opencode'])('answers a saved %s task as a new local turn', async (sourceAgentId) => {
+    const fetchRunStatus = vi.fn();
+    await expect(resolveQuestionFormStrategyTaskExecutionId({
+      sourceAgentId, sourceRunId: 'old-run', persistedTaskExecutionId: 'frozen-cloud-task', fetchRunStatus,
+    })).resolves.toBeUndefined();
+    expect(fetchRunStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not restore a retired runtime task from a legacy message missing its agent id', async () => {
+    const fetchRunStatus = vi.fn(async () => ({ agentId: 'amr', strategyTask: { taskExecutionId: 'old-task' } } as ChatRunStatusResponse));
+    await expect(resolveQuestionFormStrategyTaskExecutionId({ sourceRunId: 'old-run', fetchRunStatus })).resolves.toBeUndefined();
+  });
+
   it('recovers the task handle from status during the same-render projection race', async () => {
     const fetchRunStatus = vi.fn(async () => ({
       strategyTask: { taskExecutionId: 'task-1' },

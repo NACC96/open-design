@@ -432,11 +432,8 @@ export function RecentProjectsStrip({
   // recvqgif6Xa7Wb "隐藏非 Team workspace 分享到团队的入口") — the exact class
   // of bug `workspaceContextHasTeamIdentity`'s own doc comment warns about:
   // "Deriving it twice is how a UI grows a button that can only ever fail."
-  const collaborationAvailable =
-    collaborationEnabled ??
-    (workspaceContextHasTeamIdentity(workspaceContext) &&
-      workspaceContext?.permissions.canShareProjects === true);
-  const canAccessInviteFlow = canAccessWorkspaceInviteFlow(workspaceContext);
+  const collaborationAvailable = false;
+  const canAccessInviteFlow = false;
   // The invite dialog's seat-gate upgrade CTA shares the public Pricing
   // destination owned by `workspaceUpgradeUrl` in EntryNavRail.tsx.
   const inviteUpgradeUrl = workspaceUpgradeUrl(workspaceContext, workspaceBilling);
@@ -457,7 +454,7 @@ export function RecentProjectsStrip({
   // has no shared catalog to show, so the tab would only ever open an empty
   // state. Keyed on the workspace kind, not on `canShareProjects` (a role bit
   // a personal owner also carries).
-  const teamCollectionAvailable = workspaceContext?.workspaceType === 'team';
+  const teamCollectionAvailable = false;
   const collectionOptions = teamCollectionAvailable
     ? COLLECTION_OPTIONS
     : COLLECTION_OPTIONS.filter((option) => option.id !== 'teamProjects');
@@ -474,7 +471,6 @@ export function RecentProjectsStrip({
   // team-space deep link would be reset before the context arrives).
   const collectionUnavailable =
     showCollectionTabs &&
-    !workspaceContextLoading &&
     !teamCollectionAvailable &&
     collection === 'teamProjects';
   useEffect(() => {
@@ -1534,7 +1530,7 @@ export function RecentProjectsStrip({
           {t(
             collection === 'teamProjects'
               ? 'entry.blankAllProjectsDescription'
-              : 'entry.blankDraftsDescription',
+              : 'entry.draftsDescription',
           )}
         </p>
       ) : null}

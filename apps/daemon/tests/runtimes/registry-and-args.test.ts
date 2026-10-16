@@ -4,7 +4,7 @@ import {
 } from './helpers/test-helpers.js';
 import { codexNeedsDangerFullAccessSandbox } from '../../src/runtimes/defs/codex.js';
 import { isKnownServiceTier } from '../../src/runtimes/models.js';
-import { readLocalAgentProfileDefs } from '../../src/runtimes/registry.js';
+import { SHIPPED_AGENT_DEFS, readLocalAgentProfileDefs } from '../../src/runtimes/registry.js';
 
 test('AGENT_DEFS ids are unique', () => {
   const ids = AGENT_DEFS.map((a) => a.id);
@@ -934,4 +934,33 @@ test('amp uses headless execute mode with the Claude-compatible stream parser', 
   // An unknown model id is ignored rather than passed as a bogus mode.
   const bogus = amp.buildArgs('', [], [], { model: 'gpt-5' });
   assert.equal(bogus.includes('--mode'), false);
+});
+
+
+test('the shipped registry exposes local agents without Cloud or BYOK runtimes', () => {
+  const ids = SHIPPED_AGENT_DEFS.map((agent) => agent.id);
+  assert.equal(ids[0], 'claude');
+  for (const id of ['claude', 'codex', 'opencode', 'antigravity']) assert.ok(ids.includes(id));
+  for (const id of ['amr', 'byok-opencode']) {
+    assert.equal(ids.includes(id), false);
+    assert.equal(AGENT_DEFS.some((agent) => agent.id === id), false);
+  }
+});
+
+test('local profiles cannot restore retired Cloud or BYOK ids', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-retired-profiles-'));
+  try {
+    await withEnvSnapshot(['OD_AGENT_PROFILES_CONFIG'], async () => {
+      const config = join(dir, 'agents.local.json');
+      writeFileSync(config, JSON.stringify({ agents: [
+        { id: 'amr', baseAgent: 'claude', bin: 'claude' },
+        { id: 'byok-opencode', baseAgent: 'opencode', bin: 'opencode' },
+        { id: 'my-local-agent', baseAgent: 'claude', bin: 'claude' },
+      ] }));
+      process.env.OD_AGENT_PROFILES_CONFIG = config;
+      assert.deepEqual(readLocalAgentProfileDefs().map((agent) => agent.id), ['my-local-agent']);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

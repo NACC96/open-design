@@ -126,6 +126,16 @@ function renderPluginsView() {
 }
 
 describe('PluginsView Team panel workspace scope', () => {
+  it('never mounts the legacy Team panel for a saved team workspace', async () => {
+    vi.mocked(listPlugins).mockResolvedValue([plugin('local-plugin')]);
+    renderPluginsView();
+    await screen.findAllByText('local-plugin');
+    expect(screen.queryByRole('tab', { name: /Team/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Share to team|Sync to team/i })).toBeNull();
+    expect(vi.mocked(fetchSkills)).not.toHaveBeenCalled();
+    expect(vi.mocked(listPlugins)).toHaveBeenCalledWith(expect.objectContaining({ workspaceContext: currentWorkspaceContext }));
+  });
+
   beforeEach(() => {
     resetWorkspaceContextCache();
     currentWorkspaceContext = workspaceContext('ws-a');
@@ -199,151 +209,10 @@ describe('PluginsView Team panel workspace scope', () => {
     expect(vi.mocked(listPlugins)).toHaveBeenCalledTimes(4);
   });
 
-  it('does not retain another workspace skill or shared badge when the successor reads fail', async () => {
-    vi.mocked(fetchSkills).mockImplementation(async (context) => {
-      if (context?.workspaceId === 'ws-b') throw new Error('workspace B skills unavailable');
-      return [skill('skill-from-a')];
-    });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        const headers = new Headers(init?.headers);
-        const workspaceId = headers.get('x-od-workspace-id');
-        if (url.endsWith('/plugins/team')) {
-          if (workspaceId === 'ws-b') throw new Error('workspace B hub unavailable');
-          return jsonResponse({ ids: [] });
-        }
-        if (url.endsWith('/skills/team')) {
-          if (workspaceId === 'ws-b') throw new Error('workspace B hub unavailable');
-          return jsonResponse({ ids: ['skill-from-a'] });
-        }
-        return jsonResponse({});
-      }),
-    );
-
-    const view = renderPluginsView();
-    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
-    const skillFromA = await screen.findByText('skill-from-a');
-    expect(within(skillFromA.closest('article')!).getByText('Team')).toBeTruthy();
-
-    currentWorkspaceContext = workspaceContext('ws-b');
-    view.rerender(
-      <I18nProvider initial="en">
-        <PluginsView />
-      </I18nProvider>,
-    );
-
-    expect(screen.queryByText('skill-from-a')).toBeNull();
-    await waitFor(() =>
-      expect(
-        vi.mocked(fetchSkills).mock.calls.some(([context]) => context?.workspaceId === 'ws-b'),
-      ).toBe(true),
-    );
-    expect(screen.queryByText('skill-from-a')).toBeNull();
-  });
-
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it('scopes each skills read and discards a late response for the previous workspace', async () => {
-    const readA = deferred<SkillSummary[]>();
-    const readB = deferred<SkillSummary[]>();
-    vi.mocked(fetchSkills).mockImplementation((context) =>
-      context?.workspaceId === 'ws-b' ? readB.promise : readA.promise,
-    );
-
-    const view = renderPluginsView();
-    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
-
-    await waitFor(() =>
-      expect(
-        vi.mocked(fetchSkills).mock.calls.some(([context]) => context?.workspaceId === 'ws-a'),
-      ).toBe(true),
-    );
-
-    // Keep ws-a pending and move the mounted panel to ws-b. The identity change
-    // itself must start the successor read; correctness cannot wait for focus
-    // or the 10-second poll.
-    currentWorkspaceContext = workspaceContext('ws-b');
-    view.rerender(
-      <I18nProvider initial="en">
-        <PluginsView />
-      </I18nProvider>,
-    );
-
-    await waitFor(() =>
-      expect(
-        vi.mocked(fetchSkills).mock.calls.some(([context]) => context?.workspaceId === 'ws-b'),
-      ).toBe(true),
-    );
-
-    await act(async () => {
-      readB.resolve([skill('skill-from-b')]);
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.getByText('skill-from-b')).toBeTruthy());
-
-    await act(async () => {
-      readA.resolve([skill('skill-from-a')]);
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('skill-from-b')).toBeTruthy();
-    expect(screen.queryByText('skill-from-a')).toBeNull();
-    expect(
-      vi.mocked(fetchSkills).mock.calls.map(([context]) => context?.workspaceId),
-    ).toEqual(['ws-a', 'ws-b']);
-  });
-
-  it('discards late parent plugin rows from the previous workspace', async () => {
-    const readA = deferred<InstalledPluginRecord[]>();
-    const readB = deferred<InstalledPluginRecord[]>();
-    vi.mocked(fetchSkills).mockResolvedValue([]);
-    vi.mocked(listPlugins).mockImplementation((options = {}) =>
-      options.workspaceContext?.workspaceId === 'ws-b' ? readB.promise : readA.promise,
-    );
-
-    const view = renderPluginsView();
-    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
-    await waitFor(() =>
-      expect(
-        vi.mocked(listPlugins).mock.calls.filter(
-          ([options]) => options?.workspaceContext?.workspaceId === 'ws-a',
-        ),
-      ).toHaveLength(2),
-    );
-
-    currentWorkspaceContext = workspaceContext('ws-b');
-    view.rerender(
-      <I18nProvider initial="en">
-        <PluginsView />
-      </I18nProvider>,
-    );
-    await waitFor(() =>
-      expect(
-        vi.mocked(listPlugins).mock.calls.filter(
-          ([options]) => options?.workspaceContext?.workspaceId === 'ws-b',
-        ),
-      ).toHaveLength(2),
-    );
-
-    await act(async () => {
-      readB.resolve([plugin('plugin-from-b')]);
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.getByText('plugin-from-b')).toBeTruthy());
-
-    await act(async () => {
-      readA.resolve([plugin('plugin-from-a')]);
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText('plugin-from-b')).toBeTruthy();
-    expect(screen.queryByText('plugin-from-a')).toBeNull();
   });
 
   it('keeps the event-refreshed plugin rows when a same-identity read resolves late', async () => {
@@ -373,74 +242,5 @@ describe('PluginsView Team panel workspace scope', () => {
     });
     expect(screen.getAllByText('fresh-plugin').length).toBeGreaterThan(0);
     expect(screen.queryAllByText('stale-plugin')).toHaveLength(0);
-  });
-
-  it('discards late shared IDs issued for the previous workspace', async () => {
-    const sharedA = {
-      plugins: deferred<Response>(),
-      skills: deferred<Response>(),
-    };
-    const sharedB = {
-      plugins: deferred<Response>(),
-      skills: deferred<Response>(),
-    };
-    const requestCounts = { plugins: 0, skills: 0 };
-    vi.mocked(fetchSkills).mockImplementation(async (context) => [
-      skill(`skill-from-${context?.workspaceId === 'ws-b' ? 'b' : 'a'}`),
-    ]);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith('/skills/skill-from-a/share')) {
-          return Promise.resolve(jsonResponse({ shared: true }));
-        }
-        if (url.endsWith('/plugins/team')) {
-          requestCounts.plugins += 1;
-          if (requestCounts.plugins === 1) return Promise.resolve(jsonResponse({ ids: [] }));
-          return requestCounts.plugins === 2 ? sharedA.plugins.promise : sharedB.plugins.promise;
-        }
-        if (url.endsWith('/skills/team')) {
-          requestCounts.skills += 1;
-          if (requestCounts.skills === 1) return Promise.resolve(jsonResponse({ ids: [] }));
-          return requestCounts.skills === 2 ? sharedA.skills.promise : sharedB.skills.promise;
-        }
-        return Promise.resolve(jsonResponse({}));
-      }),
-    );
-
-    const view = renderPluginsView();
-    fireEvent.click(await screen.findByTestId('plugins-tab-team'));
-    const skillFromA = await screen.findByText('skill-from-a');
-    await waitFor(() => expect(requestCounts).toEqual({ plugins: 1, skills: 1 }));
-    fireEvent.click(within(skillFromA.closest('article')!).getByRole('button'));
-    await waitFor(() => expect(requestCounts).toEqual({ plugins: 2, skills: 2 }));
-
-    currentWorkspaceContext = workspaceContext('ws-b');
-    view.rerender(
-      <I18nProvider initial="en">
-        <PluginsView />
-      </I18nProvider>,
-    );
-    await waitFor(() => expect(requestCounts).toEqual({ plugins: 3, skills: 3 }));
-
-    await act(async () => {
-      sharedB.plugins.resolve(jsonResponse({ ids: [] }));
-      sharedB.skills.resolve(jsonResponse({ ids: ['skill-from-b'] }));
-      await Promise.resolve();
-    });
-    const skillFromB = await screen.findByText('skill-from-b');
-    expect(within(skillFromB.closest('article')!).getByText('Team')).toBeTruthy();
-
-    await act(async () => {
-      sharedA.plugins.resolve(jsonResponse({ ids: [] }));
-      sharedA.skills.resolve(jsonResponse({ ids: [] }));
-      await Promise.resolve();
-    });
-
-    expect(within(skillFromB.closest('article')!).getByText('Team')).toBeTruthy();
-    expect(
-      vi.mocked(fetchSkills).mock.calls.map(([context]) => context?.workspaceId),
-    ).toEqual(['ws-a', 'ws-a', 'ws-b']);
   });
 });

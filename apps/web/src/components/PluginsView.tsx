@@ -159,7 +159,11 @@ export function sharedResourceIsMine(
 
 function isPersonalPluginRecord(plugin: InstalledPluginRecord): boolean {
   if (!USER_SOURCE_KINDS.has(plugin.sourceKind)) return false;
-  return !plugin.source.startsWith('team:plugin:');
+  return !isMaterializedTeamPlugin(plugin);
+}
+
+function isMaterializedTeamPlugin(plugin: InstalledPluginRecord): boolean {
+  return plugin.source.startsWith('team:plugin:');
 }
 
 // Mirrors `isPersonalPluginRecord` for skills: a skill materialized from a
@@ -180,7 +184,6 @@ const PLUGINS_TABS: ReadonlyArray<{
   { id: 'installed' },
   { id: 'available' },
   { id: 'sources' },
-  { id: 'team' },
 ];
 
 const PLUGIN_SHARE_DETAILS: Record<PluginShareAction, {
@@ -763,16 +766,6 @@ export function PluginsView({
             t={t}
           />
         ) : null}
-
-        {activeTab === 'team' ? (
-          <TeamPanel
-            t={t}
-            plugins={userPlugins}
-            workspaceContext={pluginsWorkspaceContext}
-            workspaceIdentity={pluginsIdentity}
-            workspaceReadMode={pluginsReadMode}
-          />
-        ) : null}
       </div>
 
       <AnimatePresence>
@@ -1055,15 +1048,8 @@ export function ExtensionsMarketplace({
   const catalogStaleRef = useRef(false);
   const sharedResourcesStaleRef = useRef(false);
   const myMemberId = workspaceContext?.workspaceMemberId ?? null;
-  // The 团队 scope is a team-workspace surface backed by the resource hub: it
-  // lists the resources shared into the team and offers a share-to-team action.
-  // Gate it on TEAM IDENTITY — the same predicate the daemon uses to accept a
-  // hub share (workspaceContextHasTeamIdentity; see team-resource-share.ts) —
-  // NOT on the billing plan. A team on a free/unpaid tier (trial, lapsed, or
-  // billing not yet resolved) still has a real team resource plane with shared
-  // resources; gating on the plan hid the scope from those teams even though the
-  // daemon happily serves and shares their resources. Personal / signed-out
-  // sessions have no team plane and correctly get no team pill.
+  // Ownership reads still use the exact workspace identity even though Team
+  // navigation and resource-sharing actions are not exposed in this fork.
   const hasTeamWorkspace = workspaceContextHasTeamIdentity(workspaceContext);
   const pageViewFiredRef = useRef(false);
   useEffect(() => {
@@ -1116,8 +1102,8 @@ export function ExtensionsMarketplace({
     });
   }
   useEffect(() => {
-    if (scope === 'team' && !hasTeamWorkspace) setScope('official');
-  }, [scope, hasTeamWorkspace]);
+    if (scope === 'team') setScope('official');
+  }, [scope]);
   const [query, setQuery] = useState('');
   // Selected category chip (`null` = 全部). Slugs come from the cards in scope.
   const [category, setCategory] = useState<string | null>(null);
@@ -1161,6 +1147,7 @@ export function ExtensionsMarketplace({
   // The card the user drilled into. #5517's rows are click-to-inspect; the port
   // shipped them as inert markup, so no card in 扩展 opened anything (issue #129).
   const [cardDetail, setCardDetail] = useState<MarketCardDetail | null>(null);
+  const [cardDetailIdentity, setCardDetailIdentity] = useState<string | null>(null);
 
   function openCardDetail(detail: MarketCardDetail | null) {
     if (!detail) return;
@@ -1179,6 +1166,7 @@ export function ExtensionsMarketplace({
       navigate({ kind: 'marketplace-detail', pluginId: detail.record.id });
       return;
     }
+    setCardDetailIdentity(marketplaceIdentityRef.current);
     setCardDetail(detail);
   }
 
@@ -1498,6 +1486,14 @@ export function ExtensionsMarketplace({
           cache: 'no-store',
           headers: workspaceProjectHeaders(context),
         });
+        if (res.status === 401 || res.status === 403) {
+          if (!readIsStillCurrent()) return false;
+          // An explicit denial revokes the snapshot; only transient failures
+          // may retain last-good membership for this same identity.
+          setter(new Set());
+          metaSetter(new Map());
+          return true;
+        }
         if (!res.ok) return false;
         const body = (await res.json()) as { ids?: unknown; resources?: unknown };
         if (!readIsStillCurrent()) return false;
@@ -1527,8 +1523,7 @@ export function ExtensionsMarketplace({
         }
         return true;
       } catch {
-        // Off-team / offline → keep the last known collection until the next
-        // successful read, avoiding a flicker when the workspace proxy is slow.
+        // Transient/offline failure: retain only this identity's last-good data.
         return false;
       }
     };
@@ -1611,15 +1606,18 @@ export function ExtensionsMarketplace({
     };
   }, [hasTeamWorkspace, isActive, refreshSharedResources, marketplaceIdentity]);
 
-  const userPlugins = useMemo(
-    () => plugins.filter(isPersonalPluginRecord),
+  const localPlugins = useMemo(
+    () => plugins.filter((plugin) => isPersonalPluginRecord(plugin) || isMaterializedTeamPlugin(plugin)),
     [plugins],
   );
   const availablePlugins = useMemo(
     () => buildAvailablePlugins(marketplaces, allInstalledPlugins),
     [marketplaces, allInstalledPlugins],
   );
-  const userSkills = useMemo(() => skills.filter(isPersonalSkillRecord), [skills]);
+  const localSkills = useMemo(
+    () => skills.filter((skill) => isPersonalSkillRecord(skill) || skill.teamSynced),
+    [skills],
+  );
   const officialSkills = useMemo(
     () => skills.filter((skill) => skill.source !== 'user'),
     [skills],
@@ -1832,10 +1830,9 @@ export function ExtensionsMarketplace({
     // account/workspace transition before the successor read commits.
     if (loadedMarketplaceIdentity !== marketplaceIdentity) return [];
     if (scope !== 'official' && loadedSharedIdentity !== marketplaceIdentity) return [];
-    const pluginRecordCard = (record: InstalledPluginRecord, personal: boolean): MarketCard => {
+    const pluginRecordCard = (record: InstalledPluginRecord): MarketCard => {
       const title = localizePluginTitle(locale, record);
       const shared = sharedPluginIds.has(record.id);
-      const canUnshare = sharedPluginMeta.get(record.id)?.canUnshare === true;
       return {
         id: record.id,
         title,
@@ -1843,25 +1840,21 @@ export function ExtensionsMarketplace({
         accent: marketAccent(record.id),
         action: { kind: 'try', record },
         detail: { kind: 'plugin', record },
-        // Keep the share affordance live after the first share (relabeled to
-        // "sync" by `card.isShared`) so an owner can push a local edit to the
-        // team without unsharing and resharing. Restricted to `canUnshare`
-        // once shared — the same "who may manage this" gate `unshare` already
-        // uses — so a plain member who merely has the plugin installed can't
-        // overwrite the real owner's shared copy.
-        share: personal && (!shared || canUnshare) ? { kind: 'plugins', id: record.id } : null,
-        unshare: shared && canUnshare ? { kind: 'plugins', id: record.id } : null,
+        // Local-only presentation: retain ownership reads, omit team mutations.
+        share: null,
+        unshare: null,
         uninstall:
-          record.sourceKind === 'bundled' ? null : { kind: 'plugins', id: record.id },
+          record.sourceKind === 'bundled' || isMaterializedTeamPlugin(record)
+            ? null
+            : { kind: 'plugins', id: record.id },
         stats: pluginCardStats(record),
         category: pluginCardCategory(record),
         isShared: shared,
       };
     };
-    const skillCard = (skill: SkillSummary, personal: boolean): MarketCard => {
+    const skillCard = (skill: SkillSummary): MarketCard => {
       const { title, description } = localizeSkillCardCopy(locale, skill);
       const shared = sharedSkillIds.has(skill.id);
-      const canUnshare = sharedSkillMeta.get(skill.id)?.canUnshare === true;
       return {
         id: skill.id,
         title,
@@ -1872,12 +1865,9 @@ export function ExtensionsMarketplace({
         // the skill at all (issue #131).
         action: { kind: 'use-skill', skill },
         detail: { kind: 'skill', skill },
-        // See the plugin card builder above: keep sharing live post-share
-        // (relabeled "sync") for whoever may manage it, so a skill owner can
-        // push local edits without unshare-then-reshare.
-        share: personal && (!shared || canUnshare) ? { kind: 'skills', id: skill.id } : null,
-        unshare: shared && canUnshare ? { kind: 'skills', id: skill.id } : null,
-        uninstall: skill.source === 'user' ? { kind: 'skills', id: skill.id } : null,
+        share: null,
+        unshare: null,
+        uninstall: isPersonalSkillRecord(skill) ? { kind: 'skills', id: skill.id } : null,
         stats: null,
         category: skillCardCategory(skill),
         isShared: shared,
@@ -1886,16 +1876,17 @@ export function ExtensionsMarketplace({
 
     if (mode === 'plugins') {
       if (scope === 'personal')
-        return userPlugins
-          // A locally-present plugin that is team-shared by someone ELSE is not
-          // personal — it belongs in the Team tab only. Keep unshared plugins and
-          // the ones I own.
+        return localPlugins
+          // Materialized copies remain usable here only while the current
+          // workspace authorizes them. They never acquire personal ownership.
           .filter(
             (record) =>
-              !sharedPluginIds.has(record.id) ||
-              sharedResourceIsMine(sharedPluginMeta.get(record.id), myMemberId),
+              isMaterializedTeamPlugin(record)
+                ? sharedPluginIds.has(record.id)
+                : !sharedPluginIds.has(record.id) ||
+                  sharedResourceIsMine(sharedPluginMeta.get(record.id), myMemberId),
           )
-          .map((record) => pluginRecordCard(record, true));
+          .map(pluginRecordCard);
       if (scope === 'official') {
         return availablePlugins.map((plugin) => {
           const title = availablePluginTitle(plugin.entry, locale);
@@ -1928,7 +1919,7 @@ export function ExtensionsMarketplace({
         const canUnshare = meta?.canUnshare === true;
         const record =
           allInstalledPlugins.find((plugin) => plugin.id === id) ??
-          userPlugins.find((plugin) => plugin.id === id) ??
+          localPlugins.find((plugin) => plugin.id === id) ??
           null;
         const title = record ? localizePluginTitle(locale, record) : meta?.title || id;
         return {
@@ -1952,17 +1943,17 @@ export function ExtensionsMarketplace({
 
     // skills
     if (scope === 'personal')
-      return userSkills
-        // A locally-present skill that is team-shared by someone ELSE (e.g. a
-        // shared fixture both members have on disk) is not personal — it belongs
-        // in the Team tab only. Keep unshared skills and the ones I own.
+      return localSkills
+        // A stale materialized copy must disappear instead of becoming personal.
         .filter(
           (skill) =>
-            !sharedSkillIds.has(skill.id) ||
-            sharedResourceIsMine(sharedSkillMeta.get(skill.id), myMemberId),
+            skill.teamSynced
+              ? sharedSkillIds.has(skill.id)
+              : !sharedSkillIds.has(skill.id) ||
+                sharedResourceIsMine(sharedSkillMeta.get(skill.id), myMemberId),
         )
-        .map((skill) => skillCard(skill, true));
-    if (scope === 'official') return officialSkills.map((skill) => skillCard(skill, false));
+        .map(skillCard);
+    if (scope === 'official') return officialSkills.map(skillCard);
     return [...sharedSkillIds].map((id) => {
       const meta = sharedSkillMeta.get(id);
       const canUnshare = meta?.canUnshare === true;
@@ -1991,12 +1982,12 @@ export function ExtensionsMarketplace({
     mode,
     scope,
     locale,
-    userPlugins,
+    localPlugins,
     availablePlugins,
     sharedPluginIds,
     sharedPluginMeta,
     allInstalledPlugins,
-    userSkills,
+    localSkills,
     officialSkills,
     sharedSkillIds,
     sharedSkillMeta,
@@ -2006,6 +1997,17 @@ export function ExtensionsMarketplace({
     marketplaceIdentity,
     loadedSharedIdentity,
   ]);
+
+  // An open materialized skill detail has the same authority lifetime as its
+  // card. Hide it synchronously on revocation/switch, then discard the selection
+  // so a later membership refresh cannot resurrect the old detail.
+  const cardDetailIsCurrent = cardDetail?.kind !== 'skill'
+    || !cardDetail.skill.teamSynced
+    || (cardDetailIdentity === marketplaceIdentity
+      && cards.some((card) => card.detail?.kind === 'skill' && card.id === cardDetail.skill.id));
+  useEffect(() => {
+    if (!cardDetailIsCurrent) setCardDetail(null);
+  }, [cardDetailIsCurrent]);
 
   // Category chips are built from the cards actually in this scope, so the row
   // never advertises a filter that would come back empty and never invents a
@@ -2045,7 +2047,7 @@ export function ExtensionsMarketplace({
     || loadedMarketplaceIdentity !== marketplaceIdentity
     || (scope !== 'official' && loadedSharedIdentity !== marketplaceIdentity);
 
-  if (cardDetail?.kind === 'skill') {
+  if (cardDetailIsCurrent && cardDetail?.kind === 'skill') {
     const selectedSkill = cardDetail.skill;
     const closeSkillDetail = () => {
       setCardDetail(null);
@@ -2060,11 +2062,13 @@ export function ExtensionsMarketplace({
       <SkillDetailView
         skill={selectedSkill}
         author={
-          scope === 'official'
-            ? 'OpenDesign'
-            : scope === 'team'
-              ? 'Nexu Team'
-              : t('chat.you')
+          selectedSkill.teamSynced
+            ? null
+            : scope === 'official'
+              ? 'OpenDesign'
+              : scope === 'team'
+                ? 'Nexu Team'
+                : t('chat.you')
         }
         onBack={closeSkillDetail}
         {...(onUseSkill
@@ -2138,7 +2142,7 @@ export function ExtensionsMarketplace({
 
       <div className="plugin-marketplace__filter-block">
         <div className="plugin-marketplace__filters" aria-label={t('pluginsView.marketplaceSourceFiltersAria')}>
-          {MARKET_SCOPES.filter((item) => item.id !== 'team' || hasTeamWorkspace).map((item) => (
+          {MARKET_SCOPES.filter((item) => item.id !== 'team').map((item) => (
             <button
               key={item.id}
               type="button"

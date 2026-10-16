@@ -1,17 +1,6 @@
 // @vitest-environment jsdom
 
-// Regression for the workspace-team continuous-sync gap: same root cause as
-// DesignSystemsTab.sync-to-team.test.tsx, applied to the plugin/skill card
-// builders in ExtensionsMarketplace (`pluginRecordCard` / `skillCard` in
-// PluginsView.tsx). `share: personal && !shared ? {...} : null` hid the ONLY
-// entry point that pushes an update to the hub the moment a plugin/skill
-// became team-shared — an owner who edited it afterward had no way to push
-// the change short of unsharing and resharing.
-//
-// The fix keeps `share` present once shared too, but ONLY when `canUnshare`
-// is true (the same "who may manage this" signal `unshare` already uses), so
-// a teammate who merely has the plugin/skill installed locally can never
-// overwrite the real owner's shared copy under the same hub resource id.
+// Local-only resource UI keeps workspace authority while hiding team controls.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -188,22 +177,18 @@ async function showPersonalSkills(container: HTMLElement) {
   await showPersonalScope(container);
 }
 
-describe('ExtensionsMarketplace — repeat share reads as "sync" once already team-shared', () => {
-  it('plugin: keeps the row action visible (relabeled "Sync to team") for the owner, and re-POSTs /share on click', async () => {
-    mockFetch({ plugins: [OWNED_PLUGIN], sharedPluginIds: ['my-plugin'], sharedPluginCanUnshare: true });
+describe('ExtensionsMarketplace local-only resource actions', () => {
+  it.each([['plugins', false], ['plugins', true], ['skills', false], ['skills', true]] as const)('hides team actions for %s with shared=%s', async (mode, shared) => {
+    mockFetch({ plugins: [OWNED_PLUGIN], skills: [USER_SKILL], sharedPluginIds: shared ? ['my-plugin'] : [], sharedSkillIds: shared ? ['my-skill'] : [] });
     const { container } = renderMarketplace();
-    await showPersonalScope(container);
-
-    const syncButton = await screen.findByText('Sync to team');
-    expect(screen.queryByText('Share with team')).toBeNull();
-
-    fireEvent.click(syncButton);
-    await waitFor(() => expect(shareCalls).toHaveLength(1));
-    expect(shareCalls[0]?.url).toContain('/api/workspace/plugins/my-plugin/share');
-    expect(new Headers(shareCalls[0]?.init?.headers).get('x-od-workspace-id')).toBe('ws-team');
-    expect(new Headers(shareCalls[0]?.init?.headers).get('x-od-workspace-member-id')).toBe(
-      'mem-owner',
-    );
+    if (mode === 'skills') await showPersonalSkills(container);
+    else await showPersonalScope(container);
+    await screen.findByText(mode === 'skills' ? 'my-skill' : 'My Plugin');
+    expect(screen.queryByRole('button', { name: /Share (?:to|with) team|Sync to team|Remove from team/i })).toBeNull();
+    const more = screen.queryByRole('button', { name: /More|Actions/i });
+    if (more) fireEvent.click(more);
+    expect(screen.queryByRole('menuitem', { name: /Share (?:to|with) team|Sync to team|Remove from team/i })).toBeNull();
+    expect(shareCalls).toHaveLength(0);
   });
 
   it('plugin: a plugin shared by someone else never surfaces a share/sync action in Personal', async () => {
@@ -223,22 +208,5 @@ describe('ExtensionsMarketplace — repeat share reads as "sync" once already te
     expect(screen.queryByText('My Plugin')).toBeNull();
     expect(screen.queryByText('Sync to team')).toBeNull();
     expect(screen.queryByText('Share with team')).toBeNull();
-  });
-
-  it('skill: keeps the row action visible (relabeled "Sync to team") for the owner, and re-POSTs /share on click', async () => {
-    mockFetch({ skills: [USER_SKILL], sharedSkillIds: ['my-skill'], sharedSkillCanUnshare: true });
-    const { container } = renderMarketplace();
-    await showPersonalSkills(container);
-
-    const syncButton = await screen.findByText('Sync to team');
-    expect(screen.queryByText('Share with team')).toBeNull();
-
-    fireEvent.click(syncButton);
-    await waitFor(() => expect(shareCalls).toHaveLength(1));
-    expect(shareCalls[0]?.url).toContain('/api/workspace/skills/my-skill/share');
-    expect(new Headers(shareCalls[0]?.init?.headers).get('x-od-workspace-id')).toBe('ws-team');
-    expect(new Headers(shareCalls[0]?.init?.headers).get('x-od-workspace-member-id')).toBe(
-      'mem-owner',
-    );
   });
 });

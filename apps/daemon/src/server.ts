@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { resolveRoutineExecution } from './automations/runtime-selection.js';
 import { startEvidenceDelivery } from './services/evidence-delivery.js';
 import type {
   DesktopExportArtifactInput,
@@ -17615,15 +17616,7 @@ export async function startServer({
   // and dispatches into the same chat runner used by manual runs.
   routineService.setRunHandler(async ({ routine, trigger, startedAt, runId }) => {
     const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
-    let agentId = routine.agentId
-      || (typeof appConfig.agentId === 'string' && appConfig.agentId ? appConfig.agentId : null);
-    if (!agentId) {
-      const agents = await detectAgents(appConfig.agentCliEnv ?? {}).catch(() => []);
-      agentId = agents.find((agent) => agent.available)?.id ?? null;
-    }
-    if (!agentId) {
-      throw new Error('No available agent is configured. Choose an agent in Settings first.');
-    }
+    const { agentId, ...modelPrefs } = await resolveRoutineExecution(routine, appConfig, detectAgents);
 
     const now = startedAt;
     const storedRoutineWorkspaceScope =
@@ -17876,7 +17869,6 @@ export async function startServer({
       });
     };
 
-    const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
     const start = () => {
       // Notify any open `ProjectView` only after the routine run row has
       // been accepted and preparation has completed, so failed setup does not

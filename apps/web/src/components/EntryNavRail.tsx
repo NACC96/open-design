@@ -437,9 +437,7 @@ function RailRecentSection({
   // The same gates the project cards apply (RecentProjectsStrip): a move needs
   // a team plane to move into AND the right to share, and only the member's
   // own projects can be changed at all.
-  const moveToTeamAvailable =
-    workspaceContextHasTeamIdentity(workspaceContext)
-    && workspaceContext?.permissions.canShareProjects === true;
+  const moveToTeamAvailable = false;
   const isSharedProject: SharedProjectPredicate = isShared ?? (() => false);
   const ownedBySelf = (projectId: string) => projectOwnedBySelf({
     projectId,
@@ -1955,18 +1953,6 @@ export function WorkspaceTopRightAccountCluster({
       billing={billing}
       billingResponse={billingResponse}
       balanceUsd={balanceUsd}
-      // No CMS touchpoint here: every placement the app authorizes is a home
-      // placement (`opend.home.*`), and a project workbench is not home. The
-      // built-in campaign pill is product chrome, not a CMS host, and stays.
-      leadingSlot={campaignAudience ? (
-        <WorkbenchCampaignBadge
-          audience={campaignAudience}
-          page="project"
-          metricsConsent={metricsConsent}
-          installationId={installationId}
-          loggedIn={amrLoggedIn}
-        />
-      ) : null}
       updaterSlot={updaterSlot}
       onOpenSettings={onOpenSettings}
       onSignedOut={onSignedOut}

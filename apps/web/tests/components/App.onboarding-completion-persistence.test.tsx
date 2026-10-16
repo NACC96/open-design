@@ -369,59 +369,6 @@ describe('App onboarding completion persistence', () => {
     });
   });
 
-  it('persists the Cloud reset without discarding BYOK and returns to onboarding', async () => {
-    mockedLoadConfig.mockReturnValue({
-      ...returningUserConfig(),
-      mode: 'api',
-      apiKey: 'persisted-key',
-      apiProtocol: 'openai',
-      baseUrl: 'https://api.openai.com/v1',
-      model: 'gpt-5',
-      apiProviderBaseUrl: 'https://api.openai.com/v1',
-      apiProtocolConfigs: {
-        openai: {
-          apiKey: 'persisted-key',
-          baseUrl: 'https://api.openai.com/v1',
-          model: 'gpt-5',
-        },
-      },
-    });
-    mockedFetchDaemonConfig.mockResolvedValue({ onboardingCompleted: true });
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(entryViewCapture.activeSignOut).toEqual(expect.any(Function));
-    });
-    await act(async () => {
-      await entryViewCapture.activeSignOut?.();
-    });
-
-    expect(screen.getByTestId('onboarding-completed').textContent).toBe('false');
-    expect(screen.getByTestId('agent-id').textContent).toBe('none');
-    expect(screen.getByTestId('api-key').textContent).toBe('persisted-key');
-    expect(screen.getByTestId('api-model').textContent).toBe('gpt-5');
-    expect(mockedSyncConfigToDaemon).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        onboardingCompleted: false,
-        mode: 'daemon',
-        agentId: null,
-        apiKey: 'persisted-key',
-        model: 'gpt-5',
-        agentModels: {},
-        apiProtocolConfigs: {
-          openai: {
-            apiKey: 'persisted-key',
-            baseUrl: 'https://api.openai.com/v1',
-            model: 'gpt-5',
-          },
-        },
-      }),
-      { allowOnboardingReset: true },
-    );
-    expect(await navigatedToOnboarding()).toBe(true);
-  });
-
   it('keeps a completed user out of onboarding when the daemon copy still says false', async () => {
     mockedLoadConfig.mockReturnValue(returningUserConfig());
     // The completion PUT never reached the daemon last session (offline /
@@ -509,44 +456,6 @@ describe('App onboarding completion persistence', () => {
         onboardingCompleted: true,
         agentId: 'claude-code',
       }),
-    );
-  });
-
-  it('owns explicit reset in App and can persist completion again', async () => {
-    const completed = returningUserConfig();
-    routerState.current = { kind: 'home', view: 'settings' };
-    mockedLoadConfig.mockReturnValue(completed);
-    mockedFetchDaemonConfig.mockResolvedValue({ onboardingCompleted: true });
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(settingsCapture.resetOnboarding).toEqual(expect.any(Function));
-      expect(screen.getByTestId('settings-onboarding-completed').textContent).toBe('true');
-    });
-
-    act(() => {
-      settingsCapture.resetOnboarding?.({
-        ...completed,
-        onboardingCompleted: false,
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId('onboarding-completed').textContent).toBe('false');
-    });
-    expect(mockedSyncConfigToDaemon).toHaveBeenLastCalledWith(
-      expect.objectContaining({ onboardingCompleted: false }),
-      { allowOnboardingReset: true },
-    );
-
-    act(() => {
-      entryViewCapture.firstCompleteOnboarding?.();
-    });
-
-    expect(screen.getByTestId('onboarding-completed').textContent).toBe('true');
-    expect(mockedSyncConfigToDaemon).toHaveBeenLastCalledWith(
-      expect.objectContaining({ onboardingCompleted: true }),
     );
   });
 

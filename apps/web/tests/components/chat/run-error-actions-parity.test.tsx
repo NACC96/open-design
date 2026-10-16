@@ -112,13 +112,13 @@ describe('失败卡三颗按钮同壳', () => {
   it('CLI 的 Cloud 动作使用同一小尺寸主按钮，不附加旧重试', () => {
     const fingerprint = buttonFingerprint();
     const { message, onRetry, onSwitchToAmrAndRetry } = renderFailure('claude');
-    const cloud = screen.getByTestId('chat-error-switch-to-cloud');
+    const cloud = screen.getByTestId('chat-error-retry');
     expectSharedSmallButton(cloud, fingerprint);
     expect(cloud.dataset.runErrorAction).toBe('primary');
-    expect(screen.queryByTestId('chat-error-retry')).toBeNull();
+    expect(screen.queryByTestId('chat-error-switch-to-cloud')).toBeNull();
     fireEvent.click(cloud);
-    expect(onSwitchToAmrAndRetry).toHaveBeenCalledExactlyOnceWith(message);
-    expect(onRetry).not.toHaveBeenCalled();
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith(message, 'manual_retry');
+    expect(onSwitchToAmrAndRetry).not.toHaveBeenCalled();
   });
 
   it('常驻两颗实际使用共享小尺寸次级按钮', () => {

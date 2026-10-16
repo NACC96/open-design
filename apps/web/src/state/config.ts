@@ -11,6 +11,7 @@ import type {
   PetConfig,
 } from '../types';
 import { resolveFixedOriginBaseUrl } from './apiProtocols';
+import { enforceLocalAiOnlyConfig } from './local-ai-only';
 import {
   DEFAULT_ACCENT_COLOR,
   FORCED_APP_THEME,
@@ -90,7 +91,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   agentId: null,
   skillId: null,
   designSystemId: null,
-  onboardingCompleted: false,
+  // Fork (Local AI only): there is no first-run onboarding flow, so a fresh
+  // install starts completed and the ratchet below pushes that to the daemon.
+  onboardingCompleted: true,
   theme: FORCED_APP_THEME,
   accentColor: DEFAULT_ACCENT_COLOR,
   mediaProviders: {},
@@ -794,6 +797,14 @@ export function loadConfig(): AppConfig {
     const downgradedUnsupportedChatProtocol =
       downgradeUnsupportedChatProtocol(merged);
 
+    // Fork (Local AI only): a saved API-key mode, a retired Cloud/BYOK agent
+    // id, or an unfinished onboarding flag is rewritten once and persisted.
+    const localAiOnly = enforceLocalAiOnlyConfig(merged);
+    if (localAiOnly !== merged) {
+      Object.assign(merged, localAiOnly);
+      migratedConfig = true;
+    }
+
     // Fixed-origin gateways (e.g. AIHubMix) hide the Base URL field, so a config
     // persisted before the origin was auto-resolved can carry an empty baseUrl.
     // Backfill it here so every consumer (Settings form, top-bar switcher, chat)
@@ -1091,7 +1102,7 @@ export function mergeDaemonConfig(
   daemonConfig: AppConfigPrefs | null,
 ): AppConfig {
   const next = { ...localConfig };
-  if (!daemonConfig) return next;
+  if (!daemonConfig) return enforceLocalAiOnlyConfig(next);
 
   next.onboardingCompleted = ratchetOnboardingCompleted(
     localConfig.onboardingCompleted,
@@ -1179,7 +1190,8 @@ export function mergeDaemonConfig(
   if (daemonConfig.defaultProjectLocationId !== undefined) {
     next.defaultProjectLocationId = daemonConfig.defaultProjectLocationId ?? 'default';
   }
-  return next;
+  // The daemon copy may still name a retired Cloud/BYOK agent.
+  return enforceLocalAiOnlyConfig(next);
 }
 
 export function mergeDaemonMediaProviders(

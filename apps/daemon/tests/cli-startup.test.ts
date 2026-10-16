@@ -15,11 +15,16 @@ const daemonRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 describe('CLI startup boundaries', () => {
+  it('does not advertise retired Cloud commands in root help', async () => {
+    const { stdout } = await execFileAsync(process.execPath, ['--import', 'tsx', cliEntry, '--help'], { cwd: daemonRoot });
+    expect(stdout).not.toMatch(/od (amr|collab|workspace)\b/);
+    expect(stdout).toContain('od automation');
+  });
+
   it.each([
     ['doctor', ['doctor', '--help']],
     ['config', ['config', 'get', 'apiProtocol', '--daemon-url', 'http://127.0.0.1:9']],
     ['diagnostics', ['diagnostics', 'export', '--daemon-url', 'http://127.0.0.1:9']],
-    ['amr', ['amr', 'status', '--daemon-url', 'http://127.0.0.1:9']],
     ['automation create', [
       'automation', 'create',
       '--name', 'nightly',
@@ -384,199 +389,34 @@ describe('CLI startup boundaries', () => {
     ]);
   });
 
-  it('prints AMR status JSON from the daemon status endpoint without wallet fallback', async () => {
-    const seen: Array<{ method: string | undefined; url: string | undefined }> = [];
-    const server = http.createServer((req, res) => {
-      seen.push({ method: req.method, url: req.url });
-      req.resume();
-      if (req.method === 'GET' && req.url === '/api/integrations/vela/status') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({
-          loggedIn: true,
-          profile: 'local',
-          user: { email: 'amr@example.com' },
-          account: { plan: 'plus', balanceUsd: '9.5000' },
-          configPath: '/Users/test/.amr/config.json',
-        }));
-        return;
-      }
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unexpected' }));
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address();
-    const port = typeof address === 'object' && address ? address.port : 0;
-    const daemonUrl = `http://127.0.0.1:${port}`;
-
+  // Fork (Local AI only): Open Design Cloud sign-in (`od amr`) and the Cloud
+  // team-workspace commands (`od collab`, `od workspace`) are not registered.
+  // They must fall through to the daemon's argument parser and be refused as
+  // unknown commands — never start a daemon, never reach a Cloud endpoint.
+  it.each([
+    ['amr', ['amr', 'status', '--daemon-url', 'http://127.0.0.1:9']],
+    ['collab', ['collab', 'status', 'p1', '--workspace', 'ws-1', '--workspace-member', 'm-1']],
+    ['workspace', ['workspace', 'members', 'list', '--workspace', 'ws-1', '--member', 'm-1']],
+  ])('refuses the retired Cloud subcommand od %s as an unknown command', async (name, args) => {
+    let output = '';
+    let exitCode: number | null = 0;
     try {
       const result = await execFileAsync(
         process.execPath,
-        [
-          '--import',
-          'tsx',
-          cliEntry,
-          'amr',
-          'status',
-          '--daemon-url',
-          daemonUrl,
-          '--json',
-        ],
-        {
-          cwd: daemonRoot,
-          env: { ...process.env },
-        },
+        ['--import', 'tsx', cliEntry, ...args],
+        { cwd: daemonRoot, env: { ...process.env } },
       );
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        loggedIn: true,
-        profile: 'local',
-        user: { email: 'amr@example.com' },
-        account: { plan: 'plus', balanceUsd: '9.5000' },
-      });
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    } catch (error: unknown) {
+      const failed = error as { stdout?: string; stderr?: string; code?: number | null };
+      output = `${failed.stdout ?? ''}${failed.stderr ?? ''}`;
+      exitCode = typeof failed.code === 'number' ? failed.code : null;
     }
 
-    expect(seen).toEqual([
-      { method: 'GET', url: '/api/integrations/vela/status' },
-    ]);
-  });
-
-  it('prints AMR wallet fallback status JSON when daemon status has no account balance', async () => {
-    const seen: Array<{ method: string | undefined; url: string | undefined }> = [];
-    const server = http.createServer((req, res) => {
-      seen.push({ method: req.method, url: req.url });
-      req.resume();
-      if (req.method === 'GET' && req.url === '/api/integrations/vela/status') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({
-          loggedIn: true,
-          profile: 'local',
-          user: { email: 'amr@example.com' },
-          configPath: '/Users/test/.amr/config.json',
-        }));
-        return;
-      }
-      if (req.method === 'GET' && req.url === '/api/integrations/vela/wallet?refresh=1') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({
-          status: 'available',
-          profile: 'local',
-          user: { email: 'amr@example.com' },
-          balanceUsd: '0.1000',
-          updatedAt: '2026-06-23T06:05:18.782Z',
-          fetchedAt: '2026-06-23T06:05:19.000Z',
-          stale: false,
-          source: 'vela_api',
-        }));
-        return;
-      }
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unexpected' }));
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address();
-    const port = typeof address === 'object' && address ? address.port : 0;
-    const daemonUrl = `http://127.0.0.1:${port}`;
-
-    try {
-      const result = await execFileAsync(
-        process.execPath,
-        [
-          '--import',
-          'tsx',
-          cliEntry,
-          'amr',
-          'status',
-          '--daemon-url',
-          daemonUrl,
-          '--refresh',
-          '--json',
-        ],
-        {
-          cwd: daemonRoot,
-          env: { ...process.env },
-        },
-      );
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        loggedIn: true,
-        user: { email: 'amr@example.com' },
-        account: { balanceUsd: '0.1000' },
-        wallet: {
-          status: 'available',
-          balanceUsd: '0.1000',
-          source: 'vela_api',
-        },
-      });
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
-
-    expect(seen).toEqual([
-      { method: 'GET', url: '/api/integrations/vela/status' },
-      { method: 'GET', url: '/api/integrations/vela/wallet?refresh=1' },
-    ]);
-  });
-
-  it('prints AMR text status with fallback balance and no fabricated plan', async () => {
-    const server = http.createServer((req, res) => {
-      req.resume();
-      if (req.method === 'GET' && req.url === '/api/integrations/vela/status') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({
-          loggedIn: true,
-          profile: 'local',
-          user: { email: 'amr@example.com' },
-          configPath: '/Users/test/.amr/config.json',
-        }));
-        return;
-      }
-      if (req.method === 'GET' && req.url === '/api/integrations/vela/wallet') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({
-          status: 'available',
-          profile: 'local',
-          user: { email: 'amr@example.com' },
-          balanceUsd: '0.1000',
-          updatedAt: '2026-06-23T06:05:18.782Z',
-          fetchedAt: '2026-06-23T06:05:19.000Z',
-          stale: false,
-          source: 'vela_api',
-        }));
-        return;
-      }
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unexpected' }));
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address();
-    const port = typeof address === 'object' && address ? address.port : 0;
-    const daemonUrl = `http://127.0.0.1:${port}`;
-
-    try {
-      const result = await execFileAsync(
-        process.execPath,
-        [
-          '--import',
-          'tsx',
-          cliEntry,
-          'amr',
-          'status',
-          '--daemon-url',
-          daemonUrl,
-        ],
-        {
-          cwd: daemonRoot,
-          env: { ...process.env },
-        },
-      );
-      expect(result.stdout).toContain('AMR account\tamr@example.com');
-      expect(result.stdout).toContain('Profile\tlocal');
-      expect(result.stdout).toContain('Wallet balance\t$0.1000');
-      expect(result.stdout).toContain('Source\tvela_api');
-      expect(result.stdout).not.toContain('Plan\t');
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
+    expect(exitCode).toBe(2);
+    expect(output).toContain(`unknown command: od ${name}`);
+    expect(output).not.toContain('od amr <login|status>');
+    expect(output).not.toContain('[od] listening on');
   });
 });
 

@@ -1,3 +1,4 @@
+import { enforceLocalAiOnlyConfig } from '../state/local-ai-only';
 // InlineModelSwitcher — top-bar chip exposing CLI/BYOK + model picker.
 //
 // Lives in the entry view's sticky top-bar so users can swap between a
@@ -178,8 +179,8 @@ function displayAgentChipName(agent: Pick<AgentInfo, 'id' | 'name'>): string {
 }
 
 export function InlineModelSwitcher({
-  config,
-  agents,
+  config: savedConfig,
+  agents: detectedAgents,
   providerModelsCache,
   compact = false,
   daemonLive,
@@ -191,6 +192,8 @@ export function InlineModelSwitcher({
   onProviderModelsCacheChange,
   onOpenSettings,
 }: Props) {
+  const config = useMemo(() => enforceLocalAiOnlyConfig(savedConfig), [savedConfig]);
+  const agents = useMemo(() => detectedAgents.filter(isVisibleLocalCliAgent), [detectedAgents]);
   const t = useT();
   const analytics = useAnalytics();
   // This flag is a reserved presentation branch with no trigger wired yet.
@@ -1263,173 +1266,10 @@ export function InlineModelSwitcher({
           data-testid="inline-model-switcher-popover"
           style={popoverPlacement ? { maxHeight: `${popoverPlacement.maxHeight}px`, overflowY: 'auto' } : undefined}
         >
-          {compact ? null : (
-          <div className="inline-switcher__row">
-            <span className="inline-switcher__label">
-              {t('inlineSwitcher.modeLabel')}
-            </span>
-            <div className="inline-switcher__seg" role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={config.mode === 'daemon'}
-                className={
-                  'inline-switcher__seg-btn' +
-                  (config.mode === 'daemon' ? ' is-active' : '')
-                }
-                data-testid="inline-model-switcher-mode-daemon"
-                disabled={!daemonLive && config.mode !== 'daemon'}
-                onClick={() => {
-                  trackExecutionSettingsPopoverClick(analytics.track, {
-                    page_name: 'home',
-                    area: 'execution_settings_popover',
-                    element: 'mode_local_cli',
-                  });
-                  // Optional-call so a transient Fast Refresh state where a
-                  // parent has not yet re-rendered with the new prop signature
-                  // does not crash the entire entry view. The same defensive
-                  // pattern is applied to every callback below.
-                  onModeChange?.('daemon');
-                  if (!daemonLive) {
-                    setOpen(false);
-                    onOpenSettings?.('execution');
-                  }
-                }}
-                title={
-                  !daemonLive
-                    ? t('inlineSwitcher.daemonOffline')
-                    : t('inlineSwitcher.useCli')
-                }
-              >
-                {t('inlineSwitcher.chipCli')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={config.mode === 'api'}
-                className={
-                  'inline-switcher__seg-btn' +
-                  (config.mode === 'api' ? ' is-active' : '')
-                }
-                data-testid="inline-model-switcher-mode-api"
-                onClick={() => {
-                  trackExecutionSettingsPopoverClick(analytics.track, {
-                    page_name: 'home',
-                    area: 'execution_settings_popover',
-                    element: 'mode_byok',
-                  });
-                  onModeChange?.('api');
-                }}
-                title={t('inlineSwitcher.useByok')}
-              >
-                {t('inlineSwitcher.chipByok')}
-              </button>
-            </div>
-          </div>
-          )}
-
-          {/* The popover body always reflects the ACTIVE execution mode:
-              `compact` only chooses layout density, never which catalogue is
-              on offer. A BYOK chip therefore always opens onto the BYOK
-              provider's model list (regression: the compact home popover kept
-              listing the local CLI agent's cloud models while the chip showed
-              the BYOK model). */}
-          {config.mode === 'api' ? (
-            <>
-              {compact ? null : (
-              <div className="inline-switcher__row">
-                <span className="inline-switcher__label">
-                  {t('inlineSwitcher.providerLabel')}
-                </span>
-                <div className="inline-switcher__chips" role="tablist">
-                  {API_PROTOCOL_TABS.map((tab) => {
-                    const active = apiProtocol === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={active}
-                        className={
-                          'inline-switcher__chip-tab' +
-                          (active ? ' is-active' : '')
-                        }
-                        data-testid={`inline-model-switcher-provider-${tab.id}`}
-                        onClick={() => {
-                          // Unlike Settings (which skips unmapped protocols),
-                          // report the click even when the protocol has no v2
-                          // provider_id (e.g. aihubmix) — just omit the field.
-                          trackExecutionSettingsPopoverClick(analytics.track, {
-                            page_name: 'home',
-                            area: 'execution_settings_popover',
-                            element: 'byok_provider_tab',
-                            provider_id:
-                              byokProtocolToTracking(tab.id) ?? undefined,
-                          });
-                          onApiProtocolChange?.(tab.id);
-                        }}
-                      >
-                        {tab.title}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              )}
-
-              <div className="inline-switcher__row">
-                <span className="inline-switcher__label">
-                  {t('inlineSwitcher.modelLabel')}
-                </span>
-                {apiModelOptions.length > 0 ? (
-                  <SearchableModelSelect
-                    className="inline-switcher__select"
-                    popoverClassName="inline-model-popover"
-                    data-testid="inline-model-switcher-api-model"
-                    searchInputTestId="inline-model-switcher-api-model-search"
-                    popoverTestId="inline-model-switcher-api-model-popover"
-                    searchPlaceholder={t('designs.searchPlaceholder')}
-                    getPopoverBoundary={getModelPopoverBoundary}
-                    aria-label={t('inlineSwitcher.modelLabel')}
-                    models={apiModelChoices}
-                    value={config.model}
-                    onChange={(nextValue) => {
-                      trackExecutionSettingsPopoverClick(analytics.track, {
-                        page_name: 'home',
-                        area: 'execution_settings_popover',
-                        element: 'model_dropdown',
-                        execution_mode: 'byok',
-                        provider_id:
-                          byokProtocolToTracking(apiProtocol) ?? undefined,
-                        model_id: modelIdForTracking(nextValue),
-                      });
-                      onApiModelChange?.(nextValue);
-                    }}
-                    additionalOptions={
-                      config.model && !apiModelIds.includes(config.model)
-                        ? [
-                            {
-                              value: config.model,
-                              label: `${config.model} ${t('inlineSwitcher.customSuffix')}`,
-                            },
-                          ]
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <span className="inline-switcher__hint">
-                    {t('inlineSwitcher.openSettingsForModel')}
-                  </span>
-                )}
-              </div>
-
-              {!config.apiKey ? (
-                <div className="inline-switcher__warn" role="status">
-                  {t('inlineSwitcher.missingApiKey')}
-                </div>
-              ) : null}
-            </>
-          ) : compact ? (
+          {/* Fork (Local AI only): no execution-mode tabs and no API-key
+              (BYOK) provider catalogue — the popover always lists the
+              current local CLI agent's models. */}
+          {compact ? (
             // Compact home popover: a plain list of the CURRENT agent's model
             // names (no header, no agent icons) — switching agents lives in
             // the execution settings entry below.

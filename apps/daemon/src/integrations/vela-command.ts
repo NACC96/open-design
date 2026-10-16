@@ -18,7 +18,7 @@ import {
   applyAgentLaunchEnv,
   resolveAgentLaunch,
 } from '../runtimes/launch.js';
-import { getAgentDef } from '../runtimes/registry.js';
+import { amrAgentDef } from '../runtimes/defs/amr.js';
 
 /**
  * A failed Vela command still carries meaning on stdout.
@@ -201,11 +201,9 @@ export function runVelaCommand(
 ): Promise<string> {
   const env = options.env ?? process.env;
   const configuredEnv = configuredAmrEnv(env, options.configuredEnv);
-  const def = getAgentDef('amr');
-  if (!def) {
-    return Promise.reject(new Error('AMR runtime definition is missing'));
-  }
-  const launch = resolveAgentLaunch(def, configuredEnv);
+  // Retained Vela integrations use the launch definition directly; the
+  // Local AI chat registry intentionally does not expose this runtime.
+  const launch = resolveAgentLaunch(amrAgentDef, configuredEnv);
   const bin = launch.launchPath ?? launch.selectedPath;
   if (!bin) {
     return Promise.reject(
