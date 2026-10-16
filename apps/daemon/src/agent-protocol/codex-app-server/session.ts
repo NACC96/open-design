@@ -297,6 +297,13 @@ export function attachCodexAppServerSession(
         // turn that reported none would let the stored handle go stale and the
         // next turn would start a cold thread.
         reportSessionHandle(id);
+        // `thread/start` and `thread/resume` both answer with the model the
+        // thread actually runs — the only place codex names it when the run
+        // left the choice to the CLI's own default. Reported the way ACP
+        // agents report theirs, so project spend and run analytics can
+        // attribute the turn; the chat does not render this status.
+        const model = typeof result.model === 'string' ? result.model.trim() : '';
+        if (model) onAgentEvent({ type: 'status', label: 'model', model });
         onSessionReady?.();
         startTurn();
         return;
