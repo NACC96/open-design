@@ -73,7 +73,32 @@ describe('NewProjectPanel media provider badges', () => {
     expect(screen.queryByTestId('model-picker-option-gpt-image-2')).toBeNull();
   });
 
-  it('uses Vela as the default image provider without media API credentials', async () => {
+  it('shows Codex Subscription image models without media API credentials', () => {
+    render(
+      <NewProjectPanel
+        skills={[]}
+        designSystems={[]}
+        defaultDesignSystemId={null}
+        templates={[]}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+        mediaProviders={{}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Media' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Image' }));
+    fireEvent.click(screen.getByTestId('model-picker-trigger'));
+
+    const codexGroup = screen.getByText('Codex Subscription').closest('.ds-picker-group');
+    expect(codexGroup?.textContent).toContain('Integrated');
+    expect(screen.getByTestId('model-picker-option-codex-gpt-image-2')).toBeTruthy();
+    expect(screen.queryByText('OpenDesign Cloud')).toBeNull();
+    expect(screen.queryByTestId('model-picker-option-vela/gpt-image-2')).toBeNull();
+  });
+
+  it('uses Codex Subscription as the default image provider without media API credentials', async () => {
     const onCreate = vi.fn();
     render(
       <NewProjectPanel
@@ -91,10 +116,10 @@ describe('NewProjectPanel media provider badges', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Media' }));
     fireEvent.click(screen.getByRole('tab', { name: 'Image' }));
     await waitFor(() => {
-      expect(screen.getByTestId('model-picker-trigger').textContent).toContain('gpt-image-2 (Cloud)');
+      expect(screen.getByTestId('model-picker-trigger').textContent).toContain('gpt-image-2 (Codex)');
     });
     fireEvent.change(screen.getByTestId('new-project-name'), {
-      target: { value: 'Vela default image' },
+      target: { value: 'Codex default image' },
     });
     fireEvent.click(screen.getByTestId('create-project'));
 
@@ -102,14 +127,14 @@ describe('NewProjectPanel media provider badges', () => {
       expect.objectContaining({
         metadata: expect.objectContaining({
           kind: 'image',
-          imageModel: 'vela/gpt-image-2',
+          imageModel: 'codex-gpt-image-2',
           imageAspect: '1:1',
         }),
       }),
     );
   });
 
-  it('treats a legacy template gpt-image-2 recommendation as the managed Cloud route', async () => {
+  it('treats a legacy template gpt-image-2 recommendation as the Codex Subscription route', async () => {
     const template = {
       id: 'legacy-gpt-image-template',
       surface: 'image' as const,
@@ -165,7 +190,7 @@ describe('NewProjectPanel media provider badges', () => {
       );
     });
     fireEvent.change(screen.getByTestId('new-project-name'), {
-      target: { value: 'Managed template image' },
+      target: { value: 'Codex template image' },
     });
     fireEvent.click(screen.getByTestId('create-project'));
 
@@ -173,10 +198,10 @@ describe('NewProjectPanel media provider badges', () => {
       expect.objectContaining({
         metadata: expect.objectContaining({
           kind: 'image',
-          imageModel: 'vela/gpt-image-2',
+          imageModel: 'codex-gpt-image-2',
           imageAspect: '16:9',
           promptTemplate: expect.objectContaining({
-            model: 'vela/gpt-image-2',
+            model: 'codex-gpt-image-2',
           }),
         }),
       }),
@@ -253,7 +278,7 @@ describe('NewProjectPanel media provider badges', () => {
     expect(screen.queryByTestId('model-picker-option-gpt-image-2')).toBeNull();
   });
 
-  it('keeps the managed Vela default when another provider is configured', () => {
+  it('keeps the Codex default when another provider is configured', () => {
     const onCreate = vi.fn();
     render(
       <NewProjectPanel
@@ -285,7 +310,7 @@ describe('NewProjectPanel media provider badges', () => {
     expect(onCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({
-          imageModel: 'vela/gpt-image-2',
+          imageModel: 'codex-gpt-image-2',
         }),
       }),
     );

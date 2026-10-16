@@ -45,7 +45,7 @@ beforeEach(async () => {
       if ((req.url ?? '').includes('/media/tasks/')) {
         // Immediately resolve the poll so the CLI exits cleanly.
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ status: 'done', file: { name: 'out.png', size: 3 } }));
+        res.end(JSON.stringify({ status: 'done', progress: ['Generating with Codex'], file: { name: 'out.png', size: 3 } }));
         return;
       }
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -69,17 +69,20 @@ const LONG_PROMPT =
   'volumetric fog, 85mm, shallow depth of field — line two of a long prompt.';
 
 async function runCli(args: string[], input?: string): Promise<void> {
-  const { code, stderr } = await new Promise<{ code: number; stderr: string }>((resolve, reject) => {
+  const { code, stdout, stderr } = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
       cwd: daemonRoot,
       env: { ...process.env, OD_PROJECT_ID: 'p1' },
-      stdio: ['pipe', 'ignore', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
+    let stdout = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', c => { stdout += c; });
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (c) => (stderr += c));
     child.on('error', reject);
-    child.on('close', (exitCode) => resolve({ code: exitCode ?? -1, stderr }));
+    child.on('close', (exitCode) => resolve({ code: exitCode ?? -1, stdout, stderr }));
     if (input !== undefined) child.stdin.end(input);
     else child.stdin.end();
   });
@@ -89,9 +92,17 @@ async function runCli(args: string[], input?: string): Promise<void> {
   // result handling — fails the spec instead of passing on the recorded request
   // alone.
   expect(code, `od media generate exited ${code}; stderr:\n${stderr}`).toBe(0);
+  if (args.includes('--json')) {
+    expect(JSON.parse(stdout.trim())).toMatchObject({file: {name: 'out.png'}});
+    expect(stderr).toContain('Generating with Codex');
+  }
 }
 
 describe('od media generate --prompt-file', () => {
+  it('keeps media wait --json stdout parseable when the provider reports progress', async () => {
+    await runCli(['media', 'wait', 'task-1', '--json', '--daemon-url', baseUrl]);
+  });
+
   it('reads a long-form prompt from a file and posts it to media/generate', async () => {
     const promptFile = path.join(tmp, 'prompt.txt');
     await writeFile(promptFile, LONG_PROMPT, 'utf8');
@@ -99,7 +110,8 @@ describe('od media generate --prompt-file', () => {
     await runCli([
       'media', 'generate',
       '--surface', 'image',
-      '--model', 'test-model',
+      '--model', 'codex-gpt-image-2',
+      '--json',
       '--prompt-file', promptFile,
       '--daemon-url', baseUrl,
     ]);
@@ -108,6 +120,7 @@ describe('od media generate --prompt-file', () => {
     expect(gen, 'media/generate was called').toBeTruthy();
     const sent = JSON.parse(gen!.body);
     expect(sent.prompt).toBe(LONG_PROMPT);
+    expect(sent.model).toBe('codex-gpt-image-2');
   });
 
   it('reads the prompt from stdin when --prompt-file is -', async () => {

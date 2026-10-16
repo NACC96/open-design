@@ -75,6 +75,13 @@ describe('mediaFailureNextStep', () => {
       expect(mediaFailureNextStep({ code: 'STUB_PROVIDER_DISABLED' })).toBe('open-settings');
     });
 
+    it('sends a signed-out Codex Subscription to `codex login`, and a missing Codex CLI to another model', () => {
+      expect(mediaFailureNextStep({ code: 'CODEX_AUTH_REQUIRED', model: 'codex-gpt-image-2' }))
+        .toBe('sign-in');
+      expect(mediaFailureNextStep({ code: 'CODEX_CLI_UNAVAILABLE', model: 'codex-gpt-image-2' }))
+        .toBe('switch-model');
+    });
+
     it('separates an expired Open Design session from a wrong BYOK key', () => {
       expect(
         mediaFailureNextStep({ message: 'vela image 401: unauthorized', model: 'vela/gpt-image-2' }),

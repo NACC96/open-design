@@ -96,7 +96,7 @@ describe('recorded media failures carry a next step', () => {
   it('reads an OD-owned credential failure as a sign-in, not a BYOK key', () => {
     expect(
       mediaTaskErrorFromFailure(new Error('vela image 401: unauthorized'), {
-        model: 'vela/gpt-image-2',
+        model: 'vela/other-cloud-model',
       }).nextStep,
     ).toBe('sign-in');
     expect(

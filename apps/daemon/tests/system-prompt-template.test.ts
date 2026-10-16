@@ -111,7 +111,7 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).not.toContain('1:1 (default');
   });
 
-  it('normalizes a legacy template recommendation to Cloud when no image model is explicit', () => {
+  it('normalizes a legacy template recommendation to the Codex default when no image model is explicit', () => {
     const out = composeSystemPrompt({
       metadata: {
         kind: 'image',
@@ -120,7 +120,7 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     });
 
     expect(out).toContain('**imageModel**: (not provided)');
-    expect(out).toContain('suggested model: vela/gpt-image-2');
+    expect(out).toContain('suggested model: codex-gpt-image-2');
     expect(out).not.toContain('suggested model: gpt-image-2');
   });
 
