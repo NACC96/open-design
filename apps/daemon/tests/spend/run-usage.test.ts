@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRunUsageAccumulator } from '../../src/spend/run-usage.js';
+import { createRunUsageAccumulator, usageFamilyOfDef } from '../../src/spend/run-usage.js';
 
 function fold(events: Array<[string, unknown]>, agentId: string | null = null) {
   const accumulator = createRunUsageAccumulator({ agentId });
@@ -199,6 +199,37 @@ describe('createRunUsageAccumulator', () => {
     // Project spend subtracts the session's previous run from it.
     expect(snapshot.tokens).toMatchObject({ input: 1600, output: 160 });
     expect(snapshot).toMatchObject({ sessionTotal: true, sessionId: 'th-1', approximate: false });
+  });
+
+  it('reads a local Codex profile or OpenCode alias by its parser family, not its id', () => {
+    const profile = createRunUsageAccumulator({ agentId: 'work-codex', usageFamily: 'codex' });
+    profile.fold('agent', { type: 'usage', usage: { input_tokens: 30_000, cached_read_tokens: 20_000, output_tokens: 300 } });
+    expect(profile.snapshot()).toMatchObject({ sessionTotal: true });
+
+    const alias = createRunUsageAccumulator({ agentId: 'mimo', usageFamily: 'opencode' });
+    alias.fold('agent', { type: 'usage', usage: { input_tokens: 100, output_tokens: 50, cached_read_tokens: 20 } });
+    expect(alias.snapshot().tokens).toMatchObject({ input: 100, cacheRead: 20 });
+  });
+
+  it('pairs a thread total with the session of the attempt that reported it', () => {
+    const init = (sessionId: string): [string, unknown] => ['agent', { type: 'status', label: 'initializing', sessionId }];
+    const total = (input: number): [string, unknown] => ['agent', { type: 'usage', usage: { input_tokens: input, output_tokens: 10 } }];
+    // Attempt one opens thread A and fails before any usage; the retry opens B.
+    expect(fold([['start', {}], init('th-A'), ['start', {}], init('th-B'), total(10_000)], 'codex'))
+      .toMatchObject({ sessionId: 'th-B', sessionTotal: true });
+    // Attempt one reports usage in A; the retry opens B and fails before any.
+    expect(fold([['start', {}], init('th-A'), total(10_000), ['start', {}], init('th-B')], 'codex'))
+      .toMatchObject({ sessionId: 'th-A', sessionTotal: true });
+  });
+
+  it('maps an agent definition to its usage family', () => {
+    expect(usageFamilyOfDef({ id: 'work-codex', streamFormat: 'json-event-stream', eventParser: 'codex' }, 'work-codex')).toBe('codex');
+    expect(usageFamilyOfDef({ id: 'byok-opencode', streamFormat: 'json-event-stream', eventParser: 'opencode' }, 'byok-opencode')).toBe('opencode');
+    expect(usageFamilyOfDef({ id: 'cursor-agent', streamFormat: 'json-event-stream' }, 'cursor-agent')).toBe('cursor-agent');
+    expect(usageFamilyOfDef({ id: 'work-claude', streamFormat: 'claude-stream-json' }, 'work-claude')).toBe('claude');
+    expect(usageFamilyOfDef({ id: 'codex', streamFormat: 'codex-app-server' }, 'codex')).toBe('codex');
+    expect(usageFamilyOfDef({ id: 'qoder', streamFormat: 'qoder-stream-json' }, 'qoder')).toBe('qoder');
+    expect(usageFamilyOfDef(null, 'gone-agent')).toBe('gone-agent');
   });
 
   it('reads Codex exec turn.completed usage as the thread total, though it declares no scope', () => {

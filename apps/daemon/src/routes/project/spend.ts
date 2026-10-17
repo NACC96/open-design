@@ -3,6 +3,7 @@ import type { Express } from 'express';
 import type { ProjectSpendResponse } from '@open-design/contracts';
 import type { AuthorizeProjectRequest } from '../../collab/project-request-authority.js';
 import type { RouteDeps } from '../../server-context.js';
+import { usageFamilyOfAgent } from '../../spend/agent-usage-family.js';
 import { computeProjectSpend } from '../../spend/project-spend.js';
 
 export interface RegisterProjectSpendRoutesDeps
@@ -28,6 +29,7 @@ export function registerProjectSpendRoutes(app: Express, ctx: RegisterProjectSpe
       const body: ProjectSpendResponse = await computeProjectSpend(db, projectId, {
         runsLogDir: path.join(dataDir, 'runs'),
         overrides: config?.modelPriceOverrides ?? null,
+        usageFamilyOf: usageFamilyOfAgent,
       });
       res.json(body);
     } catch (err) {

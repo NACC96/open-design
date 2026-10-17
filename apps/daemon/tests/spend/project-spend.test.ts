@@ -49,8 +49,13 @@ describe('project spend', () => {
     upsertMessage(db, conversationId, { id, role: 'assistant', content: `reply ${id}`, ...extra });
   }
 
-  function liveRun(db: ReturnType<typeof seed>, run: RunUsageRunState, events: Array<[string, unknown]>) {
-    for (const [event, data] of events) recordRunUsageEvent(db, run, event, data);
+  function liveRun(
+    db: ReturnType<typeof seed>,
+    run: RunUsageRunState,
+    events: Array<[string, unknown]>,
+    usageFamilyOf?: (agentId: string | null) => string | null,
+  ) {
+    for (const [event, data] of events) recordRunUsageEvent(db, run, event, data, usageFamilyOf);
   }
 
   const claudeTurn: Array<[string, unknown]> = [
@@ -331,6 +336,24 @@ describe('project spend', () => {
     // Uncached 4K + 6K + 40K, cached 6K + 14K, output 100 + 200 + 50.
     expect(spend.total.tokens).toEqual({ input: 50_000, output: 350, cacheRead: 20_000, cacheWrite: 0 });
     expect(spend.total.estimatedTurns).toBe(0);
+  });
+
+  it('prices a local Codex profile\'s resumed runs by growth, like Codex itself', async () => {
+    const db = seed();
+    const familyOf = (agentId: string | null) => (agentId === 'work-codex' ? 'codex' : agentId);
+    const execRun = (input: number): Array<[string, unknown]> => [
+      ['start', {}],
+      ['agent', { type: 'status', label: 'initializing', sessionId: 'th-work' }],
+      ['agent', { type: 'usage', usage: { input_tokens: input, output_tokens: 0 } }],
+    ];
+    const run = (id: string, messageId: string): RunUsageRunState =>
+      ({ id, assistantMessageId: messageId, agentId: 'work-codex', model: 'gpt-5.5', launchModel: 'gpt-5.5' });
+    for (const id of ['msg-1', 'msg-2']) assistant(db, 'conv-1', id, { agentId: 'work-codex' });
+    liveRun(db, run('run-1', 'msg-1'), execRun(10_000), familyOf);
+    liveRun(db, run('run-2', 'msg-2'), execRun(30_000), familyOf);
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir, usageFamilyOf: familyOf });
+    expect(spend.total.tokens.input).toBe(30_000);
   });
 
   it('drops a conversation\'s spend with the conversation', async () => {

@@ -28,7 +28,7 @@
  *   - Any other `costUsd` is that event's own cost.
  *
  * Run logs written before the producers declared a scope fall back to the
- * scope their agent is known to use ({@link LEGACY_COST_SCOPES}).
+ * scope their usage family is known to use ({@link LEGACY_COST_SCOPES}).
  *
  * `input` is always UNCACHED input. Additive (Anthropic-style) and inclusive
  * (OpenAI-style) payloads are told apart by {@link cacheIsAdditive}.
@@ -210,24 +210,47 @@ function splitByThreadShares(input: number, output: number, thread: Buckets): Bu
 
 type CostScope = 'process_cumulative' | 'session_cumulative';
 
-/** The cost scope of agents whose older run logs predate the `costScope` marker. */
+/**
+ * Usage conventions belong to the stream parser, not the agent id: local
+ * profiles and alias agents (`byok-opencode`, `mimo`) run another runtime's
+ * parser under their own id. The rules below are keyed by that parser's
+ * family, which {@link usageFamilyOfDef} reads off an agent definition.
+ */
+const FAMILY_BY_STREAM_FORMAT: Readonly<Record<string, string>> = {
+  'claude-stream-json': 'claude',
+  'qoder-stream-json': 'qoder',
+  'pi-rpc': 'pi',
+  'codex-app-server': 'codex',
+};
+
+/** The usage family of an agent definition; the agent id itself when there is none. */
+export function usageFamilyOfDef(
+  def: { id: string; streamFormat?: string; eventParser?: string } | null | undefined,
+  agentId: string | null,
+): string | null {
+  if (!def) return agentId;
+  if (def.streamFormat === 'json-event-stream') return def.eventParser || def.id;
+  return (def.streamFormat ? FAMILY_BY_STREAM_FORMAT[def.streamFormat] : undefined) ?? def.id;
+}
+
+/** The cost scope of families whose older run logs predate the `costScope` marker. */
 const LEGACY_COST_SCOPES: Readonly<Record<string, CostScope>> = {
   claude: 'session_cumulative',
   qoder: 'process_cumulative',
 };
 
 /** OpenCode and pi take the cache counts out of `input` before reporting it. */
-const ADDITIVE_CACHE_AGENTS: ReadonlySet<string> = new Set(['opencode', 'pi']);
+const ADDITIVE_CACHE_FAMILIES: ReadonlySet<string> = new Set(['opencode', 'pi']);
 
 /** Codex exec's `turn.completed` usage is the thread's running total, with no `usageScope`. */
-const UNMARKED_SESSION_CUMULATIVE_AGENTS: ReadonlySet<string> = new Set(['codex']);
+const UNMARKED_SESSION_CUMULATIVE_FAMILIES: ReadonlySet<string> = new Set(['codex']);
 
-function costScopeOf(data: Record<string, unknown>, agentId: string | null): CostScope | null {
+function costScopeOf(data: Record<string, unknown>, family: string | null): CostScope | null {
   if (data.costScope === 'process_cumulative' || data.costScope === 'session_cumulative') {
     return data.costScope;
   }
-  if (data.costScope !== undefined || !agentId) return null;
-  return LEGACY_COST_SCOPES[agentId] ?? null;
+  if (data.costScope !== undefined || !family) return null;
+  return LEGACY_COST_SCOPES[family] ?? null;
 }
 
 function reportedModelFrom(data: Record<string, unknown>): string | null {
@@ -250,8 +273,10 @@ export interface RunUsageAccumulator {
 }
 
 export interface RunUsageAccumulatorOptions {
-  /** The run's agent, used to read usage events that carry no `costScope`. */
+  /** The run's agent; its usage family when `usageFamily` is not given. */
   agentId?: string | null;
+  /** The run's usage family ({@link usageFamilyOfDef}), which reads unmarked events. */
+  usageFamily?: string | null;
 }
 
 /**
@@ -259,7 +284,7 @@ export interface RunUsageAccumulatorOptions {
  * persists incrementally can skip writes for the vast majority of events.
  */
 export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = {}): RunUsageAccumulator {
-  const agentId = options.agentId ?? null;
+  const family = options.usageFamily ?? options.agentId ?? null;
   const summed = emptyBuckets();
   // Codex app-server: the latest per-turn reading and completed turns.
   const completedTurns = emptyBuckets();
@@ -280,8 +305,11 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
   let attemptCost: number | null = null;
   let sawCost = false;
   let reportedModel: string | null = null;
-  let sessionId: string | null = null;
-  const additiveCache = agentId !== null && ADDITIVE_CACHE_AGENTS.has(agentId);
+  // Each attempt reports its own session; a thread total is paired with the
+  // session of the attempt that reported it.
+  let attemptSessionId: string | null = null;
+  let cumulativeSessionId: string | null = null;
+  const additiveCache = family !== null && ADDITIVE_CACHE_FAMILIES.has(family);
 
   const commitEvaluation = () => {
     if (!currentEvaluation) return;
@@ -303,6 +331,7 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
       if (event === 'start') {
         const pending = attemptCost !== null || currentTurn !== null || currentEvaluation !== null;
         commitAttempt();
+        attemptSessionId = null;
         return pending;
       }
       if (event !== 'agent' || !isRecord(data)) return false;
@@ -312,17 +341,17 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
         reportedModel = model;
         changed = true;
       }
-      if (data.type === 'status' && data.label === 'initializing' && !sessionId) {
+      if (data.type === 'status' && data.label === 'initializing' && !attemptSessionId) {
         const id = typeof data.sessionId === 'string' ? data.sessionId.trim() : '';
         if (id) {
-          sessionId = id;
+          attemptSessionId = id;
           changed = true;
         }
       }
       if (data.type !== 'usage') return changed;
 
       const sessionCumulative = data.usageScope === 'sessionCumulative'
-        || (data.usageScope === undefined && agentId !== null && UNMARKED_SESSION_CUMULATIVE_AGENTS.has(agentId));
+        || (data.usageScope === undefined && family !== null && UNMARKED_SESSION_CUMULATIVE_FAMILIES.has(family));
       if (sessionCumulative) {
         const turn = bucketsFromCodexTurnUsage(data.turnTokenUsage);
         if (turn) {
@@ -348,13 +377,16 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
             currentEvaluation = evaluation;
           }
           const totals = isRecord(data.usage) ? bucketsFromUsagePayload(data.usage) : null;
-          if (totals) lastCumulative = totals;
+          if (totals) {
+            lastCumulative = totals;
+            cumulativeSessionId = attemptSessionId;
+          }
         }
         usageEvents += 1;
         return true;
       }
 
-      const scope = costScopeOf(data, agentId);
+      const scope = costScopeOf(data, family);
       const buckets = isRecord(data.usage) ? bucketsFromUsagePayload(data.usage, additiveCache) : null;
       const cost = scope === 'session_cumulative' ? null : nonNegative(data.costUsd);
       if (!buckets && cost === null) return changed;
@@ -406,7 +438,7 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
         reportedCostComplete: usageEvents > 0 && costedEvents === usageEvents,
         reportedModel,
         approximate: isApproximate,
-        sessionId,
+        sessionId: lastCumulative ? cumulativeSessionId : attemptSessionId,
         sessionTotal,
       };
     },

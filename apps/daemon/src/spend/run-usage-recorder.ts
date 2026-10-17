@@ -33,18 +33,21 @@ function stringOrNull(value: unknown): string | null {
  * stays current while the run is live and survives a daemon crash with the
  * usage seen so far. Writes only on `start` (so every tracked turn has a row)
  * and on events that changed usage or model identity. Never throws: losing a
- * spend record must not fail a run.
+ * spend record must not fail a run. `usageFamilyOf` maps the run's agent to
+ * its usage family (see `usageFamilyOfDef`).
  */
 export function recordRunUsageEvent(
   db: SqliteDb,
   run: RunUsageRunState,
   event: string,
   data: unknown,
+  usageFamilyOf: (agentId: string | null) => string | null = (agentId) => agentId,
 ): void {
   if (!run.assistantMessageId || typeof run.id !== 'string' || !run.id) return;
   let accumulator = accumulators.get(run);
   if (!accumulator) {
-    accumulator = createRunUsageAccumulator({ agentId: stringOrNull(run.agentId) });
+    const agentId = stringOrNull(run.agentId);
+    accumulator = createRunUsageAccumulator({ agentId, usageFamily: usageFamilyOf(agentId) });
     accumulators.set(run, accumulator);
   }
   const changed = accumulator.fold(event, data);

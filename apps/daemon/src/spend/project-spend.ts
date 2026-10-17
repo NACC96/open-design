@@ -44,8 +44,13 @@ export interface ComputeProjectSpendOptions {
   /** `<RUNTIME_DATA_DIR>/runs`, where durable run event logs live; null skips replay. */
   runsLogDir: string | null;
   overrides?: Readonly<Record<string, ModelTokenPrice>> | null;
+  /** Maps an agent id to its usage family (`usageFamilyOfDef`); the id itself by default. */
+  usageFamilyOf?: (agentId: string | null) => string | null;
   now?: number;
 }
+
+type UsageFamilyOf = (agentId: string | null) => string | null;
+const agentIdAsFamily: UsageFamilyOf = (agentId) => agentId;
 
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -60,6 +65,7 @@ function finiteOrNull(value: unknown): number | null {
 async function replayRunLog(
   runsLogDir: string,
   message: UntrackedAssistantMessage,
+  usageFamilyOf: UsageFamilyOf,
 ): Promise<RunUsageRecord | null> {
   const runId = message.runId;
   if (!runId || !SAFE_RUN_ID.test(runId)) return null;
@@ -78,7 +84,7 @@ async function replayRunLog(
     // The event log alone still carries the usage; the model may be reported in it.
   }
   const agentId = stringOrNull(state.agentId) ?? message.agentId;
-  const accumulator = createRunUsageAccumulator({ agentId });
+  const accumulator = createRunUsageAccumulator({ agentId, usageFamily: usageFamilyOf(agentId) });
   for (const line of log.split('\n')) {
     if (!line) continue;
     try {
@@ -102,23 +108,25 @@ async function replayRunLog(
 }
 
 // Persisted message events predate the scope markers, so the scope is read
-// off the agent: Codex usage is a running thread total and Claude/Qoder cost
-// is a running process total. Every other runtime reports per step.
+// off the agent's usage family: Codex usage is a running thread total and
+// Claude/Qoder cost is a running process total. Every other runtime reports
+// per step.
 //
 // These events also dropped the cache counts, so Claude's tokens can't be
 // priced and its reported cost is used instead. That is safe only because a
 // run with no log predates durable run logs, and the Claude Code builds of
 // that time reset the running total per process; newer builds carry it across
 // `--resume`, which is why logged runs are priced from their tokens.
-const CUMULATIVE_USAGE_AGENTS = new Set(['codex']);
+const CUMULATIVE_USAGE_FAMILIES = new Set(['codex']);
 type InputOutput = { input: number; output: number };
 const MODEL_ID_SHAPE = /^[A-Za-z0-9][\w.:/@[\]-]{1,127}$/;
-const CUMULATIVE_COST_AGENTS = new Set(['claude', 'qoder']);
+const CUMULATIVE_COST_FAMILIES = new Set(['claude', 'qoder']);
 
 function reconstructFromMessageEvents(
   db: SqliteDb,
   projectId: string,
   messages: UntrackedAssistantMessage[],
+  usageFamilyOf: UsageFamilyOf,
 ): RunUsageRecord[] {
   if (messages.length === 0) return [];
   const eventsByMessage = listPersistedUsageEvents(db, messages.map((m) => m.messageId));
@@ -127,6 +135,7 @@ function reconstructFromMessageEvents(
   for (const message of messages) {
     const events = eventsByMessage.get(message.messageId) ?? [];
     const agentId = message.agentId ?? '';
+    const family = usageFamilyOf(message.agentId) ?? '';
     let input = 0;
     let output = 0;
     let usageEvents = 0;
@@ -148,7 +157,7 @@ function reconstructFromMessageEvents(
       const eventCost = finiteOrNull(event.costUsd);
       if (eventInput === null && eventOutput === null && eventCost === null) continue;
       usageEvents += 1;
-      if (CUMULATIVE_USAGE_AGENTS.has(agentId)) {
+      if (CUMULATIVE_USAGE_FAMILIES.has(family)) {
         last = { input: eventInput ?? last?.input ?? 0, output: eventOutput ?? last?.output ?? 0 };
       } else {
         input += eventInput ?? 0;
@@ -156,7 +165,7 @@ function reconstructFromMessageEvents(
       }
       if (eventCost !== null && eventCost >= 0) {
         costedEvents += 1;
-        cost = CUMULATIVE_COST_AGENTS.has(agentId) ? Math.max(cost ?? 0, eventCost) : (cost ?? 0) + eventCost;
+        cost = CUMULATIVE_COST_FAMILIES.has(family) ? Math.max(cost ?? 0, eventCost) : (cost ?? 0) + eventCost;
       }
     }
     if (last) {
@@ -198,6 +207,7 @@ export async function backfillProjectRunUsage(
   db: SqliteDb,
   projectId: string,
   runsLogDir: string | null,
+  usageFamilyOf: UsageFamilyOf = agentIdAsFamily,
 ): Promise<void> {
   const untracked = listUntrackedAssistantMessages(db, projectId);
   if (untracked.length === 0) return;
@@ -208,11 +218,11 @@ export async function backfillProjectRunUsage(
       records.push(inheritedRunUsageRecord(message.messageId, message.agentId));
       continue;
     }
-    const replayed = runsLogDir ? await replayRunLog(runsLogDir, message) : null;
+    const replayed = runsLogDir ? await replayRunLog(runsLogDir, message, usageFamilyOf) : null;
     if (replayed) records.push(replayed);
     else withoutLog.push(message);
   }
-  records.push(...reconstructFromMessageEvents(db, projectId, withoutLog));
+  records.push(...reconstructFromMessageEvents(db, projectId, withoutLog, usageFamilyOf));
   insertBackfilledRunUsage(db, records);
 }
 
@@ -364,7 +374,7 @@ export async function computeProjectSpend(
   projectId: string,
   options: ComputeProjectSpendOptions,
 ): Promise<ProjectSpendResponse> {
-  await backfillProjectRunUsage(db, projectId, options.runsLogDir);
+  await backfillProjectRunUsage(db, projectId, options.runsLogDir, options.usageFamilyOf ?? agentIdAsFamily);
   const overrides = options.overrides ?? null;
   const total = emptyBucket();
   const models = new Map<string, ProjectSpendModelRow>();
