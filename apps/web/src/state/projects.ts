@@ -38,6 +38,7 @@ import type {
   ProjectPluginFolderInstallRequest,
   ProjectScenarioTaskProfile,
   ProjectVisibility,
+  ProjectSpendResponse,
   ProjectWorkspaceScopeResponse,
   TerminalSession,
   WorkspaceCollabContext,
@@ -1286,6 +1287,42 @@ export async function listConversations(
   } catch (err) {
     if (options?.throwOnError) throw err;
     return [];
+  }
+}
+
+function isProjectSpendResponse(value: unknown): value is ProjectSpendResponse {
+  if (!value || typeof value !== 'object') return false;
+  const body = value as Partial<ProjectSpendResponse>;
+  const total = body.total;
+  return typeof body.projectId === 'string'
+    && Array.isArray(body.byModel)
+    && Array.isArray(body.byConversation)
+    && Boolean(total)
+    && typeof total?.costUsd === 'number'
+    && typeof total.turns === 'number';
+}
+
+/**
+ * `GET /api/projects/:id/spend` — the API-equivalent cost of the project's
+ * agent turns. Null when the daemon is unreachable, refuses the read, or
+ * answers with something that is not a spend report (an older daemon without
+ * the route); the caller keeps whatever it last showed.
+ */
+export async function getProjectSpend(
+  projectId: string,
+  options?: { workspaceContext?: WorkspaceCollabContext | null },
+): Promise<ProjectSpendResponse | null> {
+  const workspaceContext = options?.workspaceContext ?? null;
+  try {
+    const resp = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/spend`,
+      workspaceContext ? { headers: workspaceProjectHeaders(workspaceContext) } : undefined,
+    );
+    if (!resp.ok) return null;
+    const body: unknown = await resp.json();
+    return isProjectSpendResponse(body) ? body : null;
+  } catch {
+    return null;
   }
 }
 

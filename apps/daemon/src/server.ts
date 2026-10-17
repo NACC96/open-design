@@ -13678,6 +13678,29 @@ export async function startServer({
     // buildArgs (which performs the write) and released asynchronously
     // AFTER agy's --log-file confirms the model was propagated. See
     // `antigravity.ts` for the chain implementation.
+    // Freeze the model this spawn actually runs (and the catalog's price for
+    // it, when the agent's catalog lists one) for project spend. Read here,
+    // after every rewrite of `agentOptions.model` above. A CLI default stays
+    // null: the agent's own init/model report names it later in the stream.
+    const launchModel =
+      typeof agentOptions.model === 'string'
+      && agentOptions.model.length > 0
+      && agentOptions.model !== 'default'
+        ? agentOptions.model
+        : null;
+    run.launchModel = launchModel;
+    const launchModelOption = launchModel
+      ? findKnownModel(def, launchModel, requestedLiveModelScope)
+      : null;
+    run.launchModelPrice =
+      typeof launchModelOption?.inputPriceUsdPerMillion === 'number'
+      && typeof launchModelOption.outputPriceUsdPerMillion === 'number'
+        ? {
+            input: launchModelOption.inputPriceUsdPerMillion,
+            output: launchModelOption.outputPriceUsdPerMillion,
+          }
+        : null;
+
     let antigravityModelLockRelease: (() => void) | null = null;
     const antigravityConcreteModel =
       def.id === 'antigravity'

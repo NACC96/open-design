@@ -7,6 +7,7 @@ import { runLiveArtifactsMcpServer } from './mcp-live-artifacts-server.js';
 import { runArtifactsCli } from './artifacts-cli.js';
 import { runResource } from './resource-cli.js';
 import { runProjectHandoff } from './handoff-cli.js';
+import { formatProjectSpendText } from './spend/spend-cli.js';
 import { runConnectorsToolCli } from './tools-connectors-cli.js';
 import { runDesignSystemsToolCli } from './tools-design-systems-cli.js';
 import { DESIGN_SYSTEMS_USAGE, isDesignSystemsHelpArg } from './cli-help/index.js';
@@ -7087,6 +7088,11 @@ async function runProject(args) {
                     [--design-system <id>] [--json]
   od project list                         List projects.
   od project info <id>                    Print one project.
+  od project spend <id> [--json]          What the project's agent turns cost
+                                          at API prices (API-equivalent
+                                          estimate), by model and conversation.
+                                          Override a model's price with
+                                          \`od config set modelPriceOverrides\`.
   od project restore-automatic-scenario <id> [--json]
                                           Restore the daemon-selected default
                                           scenario with a snapshot CAS guard.
@@ -7201,6 +7207,21 @@ Common options:
       if (!resp.ok) return structuredHttpFailure(resp, 'project-not-found');
       const data = await resp.json();
       process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+      return;
+    }
+    case 'spend': {
+      const id = positionalArgs(rest, PROJECT_RESOURCE_STRING_FLAGS)[0];
+      if (!id) {
+        console.error('Usage: od project spend <id> [--json]');
+        process.exit(2);
+      }
+      const resp = await fetch(`${base}/api/projects/${encodeURIComponent(id)}/spend`, {
+        headers: workspaceHeaders,
+      });
+      if (!resp.ok) return structuredHttpFailure(resp, 'project-not-found');
+      const data = await resp.json();
+      if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+      console.log(formatProjectSpendText(data));
       return;
     }
     case 'restore-automatic-scenario': {

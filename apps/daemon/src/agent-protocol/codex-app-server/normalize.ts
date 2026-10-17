@@ -1,4 +1,4 @@
-import { createCodexTurnUsage } from '../../observability/codex-turn-usage.js';
+import { createCodexTurnTokenUsage, createCodexTurnUsage } from '../../observability/codex-turn-usage.js';
 /** @module agent-protocol/codex-app-server/normalize
  *
  * Translates codex `app-server` JSON-RPC notifications into the OpenDesign
@@ -195,6 +195,7 @@ export function createCodexAppServerNormalizer(
   cwd?: string,
 ): CodexAppServerNormalizer {
   const evaluationUsage = createCodexTurnUsage();
+  const turnTokenUsage = createCodexTurnTokenUsage();
   let emittedCount = 0;
   const emit = (event: AgentEvent) => {
     emittedCount += 1;
@@ -556,7 +557,14 @@ export function createCodexAppServerNormalizer(
     if (cacheWrite !== undefined) usage.cached_write_tokens = cacheWrite;
     if (totalTokens !== undefined) usage.total_tokens = totalTokens;
     if (Object.keys(usage).length === 0) return;
-    emit({ type: 'usage', usage, usageScope: 'sessionCumulative', evaluationTurnUsage: evaluationUsage.add(str(params.turnId), tokenUsage) });
+    emit({
+      type: 'usage',
+      usage,
+      usageScope: 'sessionCumulative',
+      evaluationTurnUsage: evaluationUsage.add(str(params.turnId), tokenUsage),
+      // The turn's own usage with its cache split — what project spend prices.
+      turnTokenUsage: turnTokenUsage.add(str(params.turnId), tokenUsage),
+    });
     emitThinkingTokens(reasoning);
   }
 
@@ -653,6 +661,7 @@ export function createCodexAppServerNormalizer(
         }
         case 'turn/started':
           evaluationUsage.start(str(isRecord(params.turn) ? params.turn.id : params.turnId));
+          turnTokenUsage.start(str(isRecord(params.turn) ? params.turn.id : params.turnId));
           patchTurnEnded = false;
           completedPatches.clear();
           previousEventWasMessage = false;

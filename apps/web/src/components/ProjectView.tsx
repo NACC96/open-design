@@ -338,6 +338,7 @@ import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
 import { ChatPane, foldStrategyTaskTurns } from './ChatPane';
 import { trailingMessageIgnoringHostCards } from '../runtime/chat/host-authored-message';
 import historyDockStyles from './chat/ConversationHistoryDock.module.css';
+import { ProjectSpendPill } from './spend/ProjectSpendPill';
 import type { ChatSendMeta, ChatSendOutcome } from './ChatComposer';
 import {
   CritiqueTheaterMount,
@@ -13797,6 +13798,12 @@ export function ProjectView({
                   dropdown → history dock (order 1) → collapse (order 2). The
                   dropdown portals in after these, so CSS `order` fixes the
                   visual sequence. */}
+              <ProjectSpendPill
+                projectId={project.id}
+                workspaceContext={projectRunWorkspaceContext}
+                streaming={streaming}
+                onEditPrices={() => onOpenSettings('execution')}
+              />
               <div className={historyDockStyles.dock} ref={setHistoryPortalTarget} data-testid="chat-history-dock" />
               <button
                 type="button"

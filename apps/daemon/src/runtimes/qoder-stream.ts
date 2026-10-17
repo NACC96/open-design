@@ -146,6 +146,8 @@ export function createQoderStreamHandler(onEvent: QoderEventSink) {
         usage: obj.usage ?? null,
         modelUsage: obj.modelUsage ?? undefined,
         costUsd: obj.total_cost_usd ?? null,
+        // Same field and semantics as Claude Code's: the process's running total.
+        costScope: 'process_cumulative',
         durationMs: typeof obj.duration_ms === 'number' ? obj.duration_ms : null,
         stopReason: obj.stop_reason ?? null,
         isError,
