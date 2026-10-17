@@ -123,7 +123,6 @@ function reconstructFromMessageEvents(
   if (messages.length === 0) return [];
   const eventsByMessage = listPersistedUsageEvents(db, messages.map((m) => m.messageId));
   const sessionModels = listProjectSessionModels(db, projectId);
-  const previousTotals = new Map<string, InputOutput>();
   const records: RunUsageRecord[] = [];
   for (const message of messages) {
     const events = eventsByMessage.get(message.messageId) ?? [];
@@ -161,13 +160,9 @@ function reconstructFromMessageEvents(
       }
     }
     if (last) {
-      // A resumed thread keeps counting from the previous turn's total.
-      const key = `${message.conversationId}\0${agentId}`;
-      const previous = previousTotals.get(key);
-      const grew = previous && last.input >= previous.input && last.output >= previous.output;
-      input = grew ? last.input - previous.input : last.input;
-      output = grew ? last.output - previous.output : last.output;
-      previousTotals.set(key, last);
+      // The thread's running total; read time subtracts the previous turn's.
+      input = last.input;
+      output = last.output;
     }
     const sessionModel = reportedModel
       ? null
@@ -180,6 +175,8 @@ function reconstructFromMessageEvents(
       reportedCostComplete: usageEvents > 0 && costedEvents === usageEvents,
       reportedModel,
       approximate: true,
+      sessionId: null,
+      sessionTotal: last !== null,
     };
     records.push({
       runId: `message:${message.messageId}`,
@@ -217,6 +214,40 @@ export async function backfillProjectRunUsage(
   }
   records.push(...reconstructFromMessageEvents(db, projectId, withoutLog));
   insertBackfilledRunUsage(db, records);
+}
+
+const SESSION_TOTAL_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'cacheWrite1hTokens',
+] as const;
+
+/**
+ * Turn rows that hold a session's running total (Codex exec, Codex logs with
+ * no per-turn reading, Codex message events) into each run's own share: its
+ * growth since the session's previous run in the conversation. A different
+ * session id, or a total that shrank, means a new thread, whose total is all
+ * its own. Without session ids on both runs, growth is an inference, so the
+ * row is flagged estimated.
+ */
+function sessionTotalsToRunShares(rows: ProjectRunUsageRow[]): ProjectRunUsageRow[] {
+  const previousByThread = new Map<string, ProjectRunUsageRow>();
+  return rows.map((row) => {
+    if (!row.sessionTotal || row.usageEvents === 0) return row;
+    // Rows arrive in message order within each conversation.
+    const key = `${row.conversationId}\0${row.agentId ?? ''}`;
+    const previous = previousByThread.get(key);
+    previousByThread.set(key, row);
+    if (!previous) return row;
+    const knownSessions = Boolean(previous.sessionId && row.sessionId);
+    if (knownSessions && previous.sessionId !== row.sessionId) return row;
+    if (SESSION_TOTAL_FIELDS.some((field) => row[field] < previous[field])) return row;
+    const share = { ...row, approximate: row.approximate || !knownSessions };
+    for (const field of SESSION_TOTAL_FIELDS) share[field] = row[field] - previous[field];
+    return share;
+  });
 }
 
 type CostBasis = 'reported' | 'computed' | 'unpriced';
@@ -338,7 +369,7 @@ export async function computeProjectSpend(
   const total = emptyBucket();
   const models = new Map<string, ProjectSpendModelRow>();
   const conversations = new Map<string, ProjectSpendConversationRow>();
-  for (const row of listProjectRunUsage(db, projectId)) {
+  for (const row of sessionTotalsToRunShares(listProjectRunUsage(db, projectId))) {
     if (row.usageEvents === 0 && row.reportedCostUsd === null) continue;
     const turn = priceRunUsageRow(row, overrides);
     addTurn(total, turn);

@@ -46,7 +46,7 @@ describe('project spend', () => {
   }
 
   function assistant(db: ReturnType<typeof seed>, conversationId: string, id: string, extra: Record<string, unknown> = {}) {
-    upsertMessage(db, conversationId, { id, role: 'assistant', content: 'x', ...extra });
+    upsertMessage(db, conversationId, { id, role: 'assistant', content: `reply ${id}`, ...extra });
   }
 
   function liveRun(db: ReturnType<typeof seed>, run: RunUsageRunState, events: Array<[string, unknown]>) {
@@ -298,11 +298,39 @@ describe('project spend', () => {
     insertConversation(db, { id: 'conv-3', projectId: 'proj-1', title: null, createdAt: Date.now(), updatedAt: Date.now() });
     assistant(db, 'conv-3', 'msg-copy-untitled', { agentId: 'opencode', events: turn });
     insertBackfilledRunUsage(db, [inheritedRunUsageRecord('msg-copy-untitled', 'opencode')]);
+    // An older fork of an untitled conversation: no boundary and no row, but
+    // the copy keeps its source's text and creation time.
+    assistant(db, 'conv-1', 'msg-untitled-source', { agentId: 'opencode', events: turn, content: 'done', createdAt: 1_700_000_000_000 });
+    insertConversation(db, { id: 'conv-4', projectId: 'proj-1', title: null, createdAt: Date.now(), updatedAt: Date.now() });
+    assistant(db, 'conv-4', 'msg-old-untitled-copy', { agentId: 'opencode', events: turn, content: 'done', createdAt: 1_700_000_000_000 });
 
     const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
-    expect(spend.total).toMatchObject({ turns: 2, reportedTurns: 2 });
-    expect(spend.total.costUsd).toBeCloseTo(0.15, 10);
+    expect(spend.total).toMatchObject({ turns: 3, reportedTurns: 3 });
+    expect(spend.total.costUsd).toBeCloseTo(0.25, 10);
     expect(spend.byConversation.map((row) => row.conversationId).sort()).toEqual(['conv-1', 'conv-2']);
+  });
+
+  it('prices each resumed Codex exec run by its growth over the session\'s previous run', async () => {
+    const db = seed();
+    const execRun = (sessionId: string, input: number, cached: number, output: number): Array<[string, unknown]> => [
+      ['start', {}],
+      ['agent', { type: 'status', label: 'initializing', sessionId }],
+      // `turn.completed` usage: the thread's running total, with no scope.
+      ['agent', { type: 'usage', usage: { input_tokens: input, cached_read_tokens: cached, output_tokens: output } }],
+    ];
+    const run = (id: string, messageId: string): RunUsageRunState =>
+      ({ id, assistantMessageId: messageId, agentId: 'codex', model: 'gpt-5.5', launchModel: 'gpt-5.5' });
+    for (const id of ['msg-1', 'msg-2', 'msg-3']) assistant(db, 'conv-1', id, { agentId: 'codex' });
+    liveRun(db, run('run-1', 'msg-1'), execRun('th-1', 10_000, 6_000, 100));
+    liveRun(db, run('run-2', 'msg-2'), execRun('th-1', 30_000, 20_000, 300));
+    // A new thread: its total is all its own, even though it is larger.
+    liveRun(db, run('run-3', 'msg-3'), execRun('th-2', 40_000, 0, 50));
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total.turns).toBe(3);
+    // Uncached 4K + 6K + 40K, cached 6K + 14K, output 100 + 200 + 50.
+    expect(spend.total.tokens).toEqual({ input: 50_000, output: 350, cacheRead: 20_000, cacheWrite: 0 });
+    expect(spend.total.estimatedTurns).toBe(0);
   });
 
   it('drops a conversation\'s spend with the conversation', async () => {

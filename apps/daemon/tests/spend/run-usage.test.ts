@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createRunUsageAccumulator } from '../../src/spend/run-usage.js';
 
-function fold(events: Array<[string, unknown]>) {
-  const accumulator = createRunUsageAccumulator();
+function fold(events: Array<[string, unknown]>, agentId: string | null = null) {
+  const accumulator = createRunUsageAccumulator({ agentId });
   for (const [event, data] of events) accumulator.fold(event, data);
   return accumulator.snapshot();
 }
@@ -71,12 +71,12 @@ describe('createRunUsageAccumulator', () => {
     expect(snapshot.reportedCostUsd).toBeCloseTo(0.75, 10);
   });
 
-  it('sums per-step usage and per-step cost (OpenCode step_finish)', () => {
+  it('sums per-step usage and per-step cost', () => {
     const snapshot = fold([
       ['agent', { type: 'usage', usage: { input_tokens: 100, output_tokens: 10, cached_read_tokens: 50 }, costUsd: 0.01 }],
       ['agent', { type: 'usage', usage: { input_tokens: 200, output_tokens: 20, cached_read_tokens: 150 }, costUsd: 0.02 }],
     ]);
-    // Inclusive accounting: cached reads are part of input_tokens.
+    // An unknown producer with no total: cache reads within input are read as inclusive.
     expect(snapshot.tokens).toEqual({ input: 100, output: 30, cacheRead: 200, cacheWrite: 0, cacheWrite1h: 0 });
     expect(snapshot.reportedCostUsd).toBeCloseTo(0.03, 10);
     expect(snapshot.reportedCostComplete).toBe(true);
@@ -91,6 +91,14 @@ describe('createRunUsageAccumulator', () => {
       }],
     ]);
     expect(snapshot.tokens).toEqual({ input: 100, output: 50, cacheRead: 20, cacheWrite: 5, cacheWrite1h: 0 });
+  });
+
+  it('reads OpenCode\'s cache counts as additive even when they are below input (step_finish)', () => {
+    // OpenCode takes the cache counts out of `input` and reports no total.
+    const snapshot = fold([
+      ['agent', { type: 'usage', usage: { input_tokens: 100, output_tokens: 50, cached_read_tokens: 20 }, costUsd: 0.01 }],
+    ], 'opencode');
+    expect(snapshot.tokens).toEqual({ input: 100, output: 50, cacheRead: 20, cacheWrite: 0, cacheWrite1h: 0 });
   });
 
   it('reads generic cache counts as inclusive when the total is input plus output', () => {
@@ -176,7 +184,7 @@ describe('createRunUsageAccumulator', () => {
     expect(snapshot.tokens).toEqual({ input: 175, output: 35, cacheRead: 175, cacheWrite: 0, cacheWrite1h: 0 });
   });
 
-  it('falls back to thread-total growth, flagged approximate, with no per-turn reading at all', () => {
+  it('keeps the thread total a Codex log ends on when it has no per-turn reading at all', () => {
     const cumulative = (input: number, output: number) => ({
       type: 'usage',
       usageScope: 'sessionCumulative',
@@ -184,12 +192,22 @@ describe('createRunUsageAccumulator', () => {
       turnTokenUsage: null,
     });
     const snapshot = fold([
+      ['agent', { type: 'status', label: 'initializing', sessionId: 'th-1' }],
       ['agent', cumulative(1000, 100)],
       ['agent', cumulative(1600, 160)],
     ]);
-    expect(snapshot.tokens.input).toBe(600);
-    expect(snapshot.tokens.output).toBe(60);
-    expect(snapshot.approximate).toBe(true);
+    // Project spend subtracts the session's previous run from it.
+    expect(snapshot.tokens).toMatchObject({ input: 1600, output: 160 });
+    expect(snapshot).toMatchObject({ sessionTotal: true, sessionId: 'th-1', approximate: false });
+  });
+
+  it('reads Codex exec turn.completed usage as the thread total, though it declares no scope', () => {
+    const snapshot = fold([
+      ['agent', { type: 'status', label: 'initializing', sessionId: 'th-exec' }],
+      ['agent', { type: 'usage', usage: { input_tokens: 20_000, cached_read_tokens: 15_000, output_tokens: 300 } }],
+    ], 'codex');
+    expect(snapshot.tokens).toEqual({ input: 5000, output: 300, cacheRead: 15_000, cacheWrite: 0, cacheWrite1h: 0 });
+    expect(snapshot).toMatchObject({ sessionTotal: true, sessionId: 'th-exec', usageEvents: 1 });
   });
 
   it('reads the model from a usage event provider/model pair', () => {

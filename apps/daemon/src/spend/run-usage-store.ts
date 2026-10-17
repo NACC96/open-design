@@ -62,6 +62,8 @@ export function migrateRunUsage(db: SqliteDb): void {
       source TEXT NOT NULL,
       approximate INTEGER NOT NULL DEFAULT 0,
       model_inferred INTEGER NOT NULL DEFAULT 0,
+      session_id TEXT,
+      session_total INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
@@ -95,6 +97,8 @@ function recordParams(record: RunUsageRecord, now: number) {
     source: record.source,
     approximate: usage.approximate ? 1 : 0,
     modelInferred: record.modelInferred ? 1 : 0,
+    sessionId: usage.sessionId,
+    sessionTotal: usage.sessionTotal ? 1 : 0,
     now,
   };
 }
@@ -104,7 +108,7 @@ const COLUMNS = `
   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, reasoning_tokens,
   usage_events, reported_cost_usd, reported_cost_complete,
   catalog_input_price, catalog_output_price, source, approximate, model_inferred,
-  created_at, updated_at
+  session_id, session_total, created_at, updated_at
 `;
 
 const VALUES = `
@@ -112,7 +116,7 @@ const VALUES = `
   @inputTokens, @outputTokens, @cacheReadTokens, @cacheWriteTokens, @cacheWrite1hTokens, @reasoningTokens,
   @usageEvents, @reportedCostUsd, @reportedCostComplete,
   @catalogInputPrice, @catalogOutputPrice, @source, @approximate, @modelInferred,
-  @now, @now
+  @sessionId, @sessionTotal, @now, @now
 `;
 
 /** Insert or replace the live row for a run; `created_at` survives updates. */
@@ -139,6 +143,8 @@ export function upsertRunUsage(db: SqliteDb, record: RunUsageRecord, now = Date.
       source = excluded.source,
       approximate = excluded.approximate,
       model_inferred = excluded.model_inferred,
+      session_id = excluded.session_id,
+      session_total = excluded.session_total,
       updated_at = excluded.updated_at
   `).run(recordParams(record, now));
 }
@@ -163,6 +169,8 @@ export function inheritedRunUsageRecord(messageId: string, agentId: string | nul
       reportedCostComplete: false,
       reportedModel: null,
       approximate: false,
+      sessionId: null,
+      sessionTotal: false,
     },
     catalogPrice: null,
     source: 'inherited',
@@ -202,6 +210,9 @@ export interface ProjectRunUsageRow {
   source: RunUsageSource;
   approximate: boolean;
   modelInferred: boolean;
+  sessionId: string | null;
+  /** The tokens are the session's running total at the end of the run. */
+  sessionTotal: boolean;
 }
 
 export function listProjectRunUsage(db: SqliteDb, projectId: string): ProjectRunUsageRow[] {
@@ -228,7 +239,9 @@ export function listProjectRunUsage(db: SqliteDb, projectId: string): ProjectRun
       ru.catalog_output_price AS catalogOutputPrice,
       ru.source AS source,
       ru.approximate AS approximate,
-      ru.model_inferred AS modelInferred
+      ru.model_inferred AS modelInferred,
+      ru.session_id AS sessionId,
+      ru.session_total AS sessionTotal
     FROM run_usage ru
     JOIN messages m ON m.id = ru.message_id
     JOIN conversations c ON c.id = m.conversation_id
@@ -240,6 +253,7 @@ export function listProjectRunUsage(db: SqliteDb, projectId: string): ProjectRun
     reportedCostComplete: row.reportedCostComplete === 1,
     approximate: row.approximate === 1,
     modelInferred: row.modelInferred === 1,
+    sessionTotal: row.sessionTotal === 1,
   }));
 }
 
@@ -265,13 +279,25 @@ export function listUntrackedAssistantMessages(
       m.run_id AS runId,
       m.agent_id AS agentId,
       m.position AS position,
-      -- A fork marks the last message it copied. Forks made before the fork
-      -- route recorded inherited rows are recognized this way.
-      EXISTS (
-        SELECT 1 FROM messages b
-        WHERE b.conversation_id = m.conversation_id
-          AND b.forked_into_json IS NOT NULL
-          AND b.position >= m.position
+      -- Forks made before the fork route recorded inherited rows: a fork
+      -- marks the last message it copied when its source had a title, and
+      -- every copy keeps its source's text and creation time under a new id.
+      (
+        EXISTS (
+          SELECT 1 FROM messages b
+          WHERE b.conversation_id = m.conversation_id
+            AND b.forked_into_json IS NOT NULL
+            AND b.position >= m.position
+        )
+        OR (m.run_id IS NULL AND EXISTS (
+          SELECT 1 FROM messages o
+          JOIN conversations oc ON oc.id = o.conversation_id
+          WHERE oc.project_id = c.project_id
+            AND o.role = 'assistant'
+            AND o.created_at = m.created_at
+            AND o.content = m.content
+            AND o.rowid < m.rowid
+        ))
       ) AS inherited
     FROM messages m
     JOIN conversations c ON c.id = m.conversation_id
