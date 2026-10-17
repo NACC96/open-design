@@ -1,6 +1,7 @@
 import type { Dict } from "../types";
 
 export const zhTW: Dict = {
+  'avatar.useAppDefault': 'Use current default',
   'billing.wallet': '錢包餘額',
   'billing.codingPlanDesignPlan': 'Design Plan',
   'billing.codingPlanPeriodHours': '{count} 小時',

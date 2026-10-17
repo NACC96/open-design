@@ -54,6 +54,7 @@ import {
 } from '../collab/useProjectWorkspaceScope';
 
 interface Props {
+  onUseDefault?: () => void;
   config: AppConfig;
   agents: AgentInfo[];
   daemonLive: boolean;
@@ -103,6 +104,7 @@ interface Props {
  * (`scopeHistoryToAgent` in `providers/daemon.ts`).
  */
 export function AvatarMenu({
+  onUseDefault,
   config: savedConfig,
   agents: detectedAgents,
   onAgentChange,
@@ -605,6 +607,14 @@ export function AvatarMenu({
           aria-label={t('avatar.title')}
           style={popoverStyle}
         >
+          {onUseDefault ? (
+            <button type="button" className="avatar-item" onClick={() => {
+              onUseDefault();
+              setOpen(false);
+            }}>
+              {t('avatar.useAppDefault')}
+            </button>
+          ) : null}
           {config.mode === 'daemon' ? (
             <>
               {/* Above the model list and outside its `hasSelectableModels`

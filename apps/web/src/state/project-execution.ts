@@ -3,8 +3,8 @@
 // A project carries `execution` — the local agent CLI and model it runs with —
 // so each project can sit on a different CLI without anyone touching
 // Settings → Execution. The app-config `agentId` + `agentModels` stay the
-// default for NEW projects (the Home picker keeps writing them, so the last
-// pick sticks), while an existing project only changes through its own picker.
+// default for NEW projects. Home keeps a separate draft and sends its choice
+// explicitly when creating the project; project pickers only patch that project.
 //
 // A project without a stamp predates this field: it follows the app-config
 // default until its first in-project change, which stamps it.

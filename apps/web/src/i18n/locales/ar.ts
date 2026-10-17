@@ -1,6 +1,7 @@
 import type { Dict } from '../types';
 
 export const ar: Dict = {
+  'avatar.useAppDefault': 'Use current default',
   'billing.wallet': 'رصيد المحفظة',
   'billing.codingPlanDesignPlan': 'Design Plan',
   'billing.codingPlanPeriodHours': '{count} ساعات',

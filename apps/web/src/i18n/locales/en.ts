@@ -1,6 +1,7 @@
 import type { Dict } from '../types';
 
 export const en: Dict = {
+  'avatar.useAppDefault': 'Use current default',
   'billing.wallet': 'Wallet balance',
   'billing.codingPlanDesignPlan': 'Design Plan',
   'billing.codingPlanPeriodHours': '{count} hours',
@@ -491,7 +492,7 @@ export const en: Dict = {
   'settings.byokNoFileToolsNotice': 'BYOK can\'t read, write, or edit project files. Use Local CLI when you need code changes.',
   'settings.byokDraftNotice': 'Complete the required fields to save this provider. Your current setup will remain active.',
   'settings.codeAgent': 'Code agent',
-  'settings.codeAgentHint': 'Choose which CLI runs your prompts.',
+  'settings.codeAgentHint': 'Choose the default CLI for new projects. Each project can keep its own agent and model.',
   'settings.rescan': '↻ Rescan',
   'settings.rescanTitle': 'Re-scan PATH',
   'settings.rescanRunning': 'Scanning...',

@@ -916,6 +916,7 @@ describe('ProjectView conversation run isolation', () => {
 
   beforeEach(() => {
     window.localStorage.clear();
+    saveMessage.mockResolvedValue(null);
     workspaceScopeMocks.ambientContext = null;
     workspaceScopeMocks.ambientLoading = false;
     workspaceScopeMocks.ambientFailure = null;
@@ -4118,6 +4119,22 @@ describe('ProjectView conversation run isolation', () => {
       expect(request).toEqual(
         expect.objectContaining({ agentId: 'agent-1', model: 'global-model', reasoning: 'max' }),
       );
+    });
+
+    it('waits for the project selection to be saved before submitting a turn', async () => {
+      conversationAMessages = [];
+      let finishSave!: (value: Project) => void;
+      patchProject.mockReturnValue(new Promise<Project>((resolve) => { finishSave = resolve; }));
+      renderProjectView(globalDefault, project, executionAgents);
+      await waitFor(() => expect(screen.getByTestId('avatar-menu-stub')).toBeTruthy());
+      await waitFor(() => expect(screen.getByTestId('active-conversation').textContent).toBe('conv-a'));
+      fireEvent.click(screen.getByTestId('avatar-stub-pick-claude'));
+      await waitFor(() => expect(patchProject).toHaveBeenCalled());
+      fireEvent.click(screen.getByTestId('submit-question-form'));
+      await act(async () => { await Promise.resolve(); });
+      expect(streamViaDaemon).not.toHaveBeenCalled();
+      await act(async () => { finishSave({ ...project, execution: { agentId: 'claude', model: 'claude-sonnet-5-5' } }); });
+      await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'claude', model: 'claude-sonnet-5-5' })));
     });
 
     it('saves an in-project switch to the project only, and the next run uses it', async () => {

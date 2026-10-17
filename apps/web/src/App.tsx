@@ -167,7 +167,7 @@ import {
 } from './state/config';
 import { enforceLocalAiOnlyConfig, isRetiredAgentId, pickDefaultLocalAgent } from './state/local-ai-only';
 import { mergeAgentModelChoice } from './components/agentModelSelection';
-import { projectExecutionFromConfig } from './state/project-execution';
+import { projectExecutionFromConfig, withProjectExecution, nextProjectExecutionForAgent, nextProjectExecutionForChoice } from './state/project-execution';
 import { createSilentUpdatePreferenceWriter } from './state/silent-update-preference';
 import { applyAppearanceToDocument } from './state/appearance';
 import { isMacPlatform } from './utils/platform';
@@ -984,6 +984,13 @@ function AppInner() {
     };
   }, [clientType, hostPlatform]);
   const [config, setConfig] = useState<AppConfig>(() => loadConfig());
+  const [homeExecution, setHomeExecution] = useState<ProjectExecutionChoice | null>(null);
+  const homeExecutionRef = useRef(homeExecution);
+  const selectHomeExecution = useCallback((choice: ProjectExecutionChoice | null) => {
+    homeExecutionRef.current = choice;
+    setHomeExecution(choice);
+  }, []);
+  const homeConfig = useMemo(() => withProjectExecution(config, homeExecution), [config, homeExecution]);
   const configRef = useRef(config);
   configRef.current = config;
   const latestPersistedConfigRef = useRef(config);
@@ -2716,6 +2723,13 @@ function AppInner() {
     [],
   );
 
+  const handleHomeAgentChange = (agentId: string) => selectHomeExecution(
+    nextProjectExecutionForAgent(homeExecutionRef.current, agentId, latestPersistedConfigRef.current, agents),
+  );
+  const handleHomeAgentModelChange = (agentId: string, choice: { model?: string; reasoning?: string; serviceTier?: string }) => selectHomeExecution(
+    nextProjectExecutionForChoice(homeExecutionRef.current ?? projectExecutionFromConfig(latestPersistedConfigRef.current), agentId, choice),
+  );
+
   const handleChangeDefaultDesignSystem = useCallback(
     (designSystemId: string | null) => {
       const next = {
@@ -3011,12 +3025,13 @@ function AppInner() {
             ? { exampleReference: input.exampleReference }
             : {}),
           // Stamp the new project with the Home picker's live choice. Read
-          // from the ref, not the daemon: the pick's app-config sync is
-          // fire-and-forget and may still be in flight. Omitted when no agent
+          // from the local draft, which never changes the Settings default.
+          // Omitted when no agent
           // is selected, which leaves the project following the default.
-          ...executionStampForNewProject(latestPersistedConfigRef.current),
+          ...executionStampForNewProject(withProjectExecution(latestPersistedConfigRef.current, homeExecutionRef.current)),
           workspaceContext: createWorkspaceContext,
         });
+        selectHomeExecution(null);
       } catch (err) {
         const errorCode =
           err instanceof Error && err.message.trim()
@@ -5380,15 +5395,15 @@ function AppInner() {
           || null
         }
         amrAccountId={amrLoginStatus?.user?.id ?? amrLoginStatus?.credentialRevision ?? null}
-        config={config}
+        config={homeConfig}
         providerModelsCache={providerModelsCache}
         onProviderModelsCacheChange={setProviderModelsCache}
         integrationInitialTab={integrationInitialTab}
         composioConfigLoading={composioConfigLoading}
         daemonLive={daemonLive}
         onModeChange={handleModeChange}
-        onAgentChange={handleAgentChange}
-        onAgentModelChange={handleAgentModelChange}
+        onAgentChange={handleHomeAgentChange}
+        onAgentModelChange={handleHomeAgentModelChange}
         onApiProtocolChange={handleApiProtocolChange}
         onApiModelChange={handleApiModelChange}
         onConfigPersist={handleConfigPersist}

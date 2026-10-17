@@ -51,6 +51,7 @@ function isActiveRunStatus(status: ChatMessage['runStatus']): boolean {
 }
 
 export interface ConversationChatContext {
+  executionReady?: () => Promise<AppConfig>;
   /** Live app config — selects daemon-vs-api mode and the active agent. */
   config: AppConfig;
   /** Agent metadata map (id → AgentInfo), used to resolve model labels. */
@@ -179,20 +180,29 @@ export function useConversationChat(
     [],
   );
 
+  const sendAdmission = useRef(false);
   const runSend = useCallback(
-    (
+    async (
       prompt: string,
       attachments: ChatAttachment[],
       commentAttachments: ChatCommentAttachment[],
       retryOfAssistantId?: string,
     ) => {
       const {
-        config: cfg,
+        config: initialConfig,
         agentsById: agents,
         locale: loc,
         sessionMode,
         workspaceContext,
       } = ctxRef.current;
+      let cfg = initialConfig;
+      if (ctxRef.current.executionReady) {
+        if (sendAdmission.current) return;
+        sendAdmission.current = true;
+        try { cfg = await ctxRef.current.executionReady(); }
+        catch (error) { setError(error instanceof Error ? error.message : 'Could not save project execution settings'); return; }
+        finally { sendAdmission.current = false; }
+      }
       if (messagesReadyScopeKeyRef.current !== messageScopeKey) return;
       // This controller is installed synchronously before dispatch, so two
       // activations in one React turn cannot admit two replacement requests.

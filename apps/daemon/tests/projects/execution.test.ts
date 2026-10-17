@@ -6,6 +6,7 @@ import {
   parseProjectExecutionChoice,
   pickRunAgentId,
   resolveRunExecutionDefaults,
+  snapshotRunExecution,
 } from '../../src/projects/execution.js';
 
 const deps = { getAgentDef, sanitizeCustomModel };
@@ -170,5 +171,18 @@ describe('inheritedRunPrefsFromProjectExecution', () => {
       { execution: { agentId: 'claude', reasoning: 'max' } },
       { model: 'default' },
     )).toEqual({ reasoning: 'max' });
+  });
+});
+
+describe('accepted run execution snapshot', () => {
+  it('pins project model, reasoning and tier independently from later edits', () => {
+    const project = { execution: { agentId: 'codex', model: 'astra', reasoning: 'high', serviceTier: 'priority' } };
+    const snapshot = snapshotRunExecution('codex', project, {}, {});
+    project.execution.model = 'sol';
+    expect(snapshot).toEqual({ agentId: 'codex', model: 'astra', reasoning: 'high', serviceTier: 'priority' });
+  });
+  it('pins CLI default explicitly and drops incompatible inherited options', () => {
+    expect(snapshotRunExecution('claude', { execution: { agentId: 'claude' } }, { agentModels: { claude: { model: 'opus' } } }, {})).toEqual({ agentId: 'claude', model: 'default' });
+    expect(snapshotRunExecution('codex', { execution: { agentId: 'codex', model: 'astra', reasoning: 'high' } }, {}, { model: 'sol' })).toEqual({ agentId: 'codex', model: 'sol' });
   });
 });

@@ -486,15 +486,25 @@ capability API.
 
 ## 7. Agent switching
 
-The picker writes the selected id to `AppConfig.agentId`, persists the local
-preference, and syncs it through `PUT /api/app-config`. Model and reasoning
-choices are stored separately under `agentModels[agentId]`.
+Settings writes the default agent to `AppConfig.agentId` and its preferences to
+`agentModels[agentId]` through `PUT /api/app-config`. Project composer pickers
+write only `Project.execution` through `PATCH /api/projects/:id`, using the
+`projects.execution_json` column introduced in PR #10.
 
 Each chat/run request carries its `agentId`, and the daemon resolves that
 definition when it creates the run. Changing the picker affects subsequent
 runs; it does not rebind or mutate a child process that is already running.
 Cancel the existing run separately if it should stop. There is no
 `POST agents.setActive` endpoint or capability-refresh handshake.
+
+Home selections are drafts for the project being created. They do not write
+app-config; Settings owns the saved default. In a project, **Use current default**
+copies that saved choice into the project's execution stamp. Unstamped projects
+retain the merged fallback behavior described below.
+
+Composer sends wait for queued execution-stamp writes to succeed. Accepted runs
+capture their model, reasoning, and service tier; later project/default edits do
+not change automatic retries or the next physical run of a locked clarification.
 
 ## 8. Selection and failure recovery
 
@@ -506,8 +516,9 @@ dedicated one-click fallback action—move the request to Claude, another
 detected CLI, or BYOK OpenCode.
 
 The generic run-creation endpoint has a narrower pre-run defaulting rule when
-`agentId` is omitted: use the configured agent if it is currently available,
-otherwise use the first available definition. This chooses an agent before a
+`agentId` is omitted: use the project's saved agent when available, then the
+configured default, then the first available definition. An unavailable project
+agent is reported in `agentResolution` and the CLI warns on stderr. This chooses an agent before a
 run starts; it is not failure recovery. Separately, when a stored native
 session has expired, the daemon may clear that same agent's stale session and
 reseed the turn with the full transcript. That recovery never changes agent

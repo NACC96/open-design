@@ -1304,7 +1304,12 @@ describe('App project creation routing', () => {
     mockedListProjects.mockResolvedValue([]);
 
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Pick Claude on Home' }));
+    const picker = await screen.findByRole('button', { name: 'Pick Claude on Home' });
+    mockedSaveConfig.mockClear();
+    mockedSyncConfigToDaemon.mockClear();
+    fireEvent.click(picker);
+    expect(mockedSaveConfig).not.toHaveBeenCalled();
+    expect(mockedSyncConfigToDaemon).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
 
     await waitFor(() =>
