@@ -2061,6 +2061,7 @@ export const th: Dict = {
   'avatar.amrConsoleMeta': 'ยอดคงเหลือและการเติมเงิน',
   'avatar.settings': 'การตั้งค่า',
   'avatar.backToProjects': 'กลับไปยังโปรเจกต์',
+  'avatar.executionSaveFailed': 'บันทึกเอเจนต์ที่เลือกสำหรับโปรเจกต์นี้ไม่สำเร็จ',
   'avatar.metaActive': 'เปิดใช้งาน',
   'avatar.metaOffline': 'ออฟไลน์',
   'avatar.metaSelected': 'เลือกแล้ว',

@@ -202,7 +202,10 @@ describe('compact home model list — opening lands on the model in effect', () 
 
     const popover = openCompactSwitcher();
 
-    const rows = within(popover).getAllByRole('radio');
+    // The model list, not the installed-CLI tabs above it (whose active tab is
+    // rightly checked).
+    const modelList = within(popover).getByRole('radiogroup', { name: 'Model' });
+    const rows = within(modelList).getAllByRole('radio');
     expect(rows).toHaveLength(LONG_CATALOG.length);
     expect(rows.some((row) => row.getAttribute('aria-checked') === 'true')).toBe(false);
     expect(scrollCalls).toHaveLength(0);

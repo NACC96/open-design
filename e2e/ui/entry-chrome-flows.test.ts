@@ -744,7 +744,7 @@ test('[P0] @critical entry execution pill opens the Local CLI and BYOK switcher 
   // The pill now lives in the Home composer footer as the compact, icon-only
   // variant: the selected agent + model are on its accessible name, and the
   // popover drops the Local CLI / BYOK segmented control in favour of the
-  // agent list plus an Execution-settings entry.
+  // installed-CLI tabs plus an Execution-settings entry.
   const pill = page.getByTestId('inline-model-switcher-chip');
   await expect(pill).toHaveAttribute('aria-label', /Codex CLI/i);
   await pill.click();
@@ -753,6 +753,10 @@ test('[P0] @critical entry execution pill opens the Local CLI and BYOK switcher 
   await expect(popover).toBeVisible();
   await expect(popover.getByTestId('inline-model-switcher-mode-daemon')).toHaveCount(0);
   await expect(popover.getByTestId('inline-model-switcher-agent-claude')).toHaveCount(0);
+  await expect(popover.getByTestId('inline-model-switcher-agent-tab-codex')).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
   await expect(popover.getByTestId('inline-model-switcher-open-settings')).toBeVisible();
 
   await page.getByTestId('inline-model-switcher-open-settings').click();

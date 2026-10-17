@@ -2061,6 +2061,7 @@ export const de: Dict = {
   'avatar.amrConsoleMeta': 'Guthaben & Aufladen',
   'avatar.settings': 'Einstellungen',
   'avatar.backToProjects': 'Zurück zu Projekten',
+  'avatar.executionSaveFailed': 'Die Agent-Auswahl für dieses Projekt konnte nicht gespeichert werden.',
   'avatar.metaActive': 'aktiv',
   'avatar.metaOffline': 'offline',
   'avatar.metaSelected': 'ausgewählt',

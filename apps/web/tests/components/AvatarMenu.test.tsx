@@ -285,7 +285,8 @@ describe('AvatarMenu', () => {
     openMenu();
 
     // The execution console itself is gone from this popover per #5517: no mode
-    // switch, no CLI list, no PATH rescan.
+    // switch, no PATH rescan. (The installed-CLI tabs ARE here — inside a
+    // project they switch that project's agent; see the tab tests below.)
     expect(screen.queryByRole('button', { name: /avatar.useLocal/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /avatar.useApi/i })).toBeNull();
     expect(screen.queryByRole('button', { name: 'avatar.rescan' })).toBeNull();
@@ -298,6 +299,51 @@ describe('AvatarMenu', () => {
     expect(openSettings).toBeTruthy();
     fireEvent.click(openSettings);
     expect(onOpenSettings).toHaveBeenCalledWith('execution');
+  });
+
+  it('offers the installed CLIs as tabs and reports a switch', () => {
+    const { onAgentChange } = renderMenu();
+
+    const menu = openMenu();
+    const tabs = within(menu).getByRole('radiogroup', {
+      name: 'inlineSwitcher.agentLabel',
+    });
+    const codexTab = within(tabs).getByTestId('avatar-agent-tab-codex');
+    const claudeTab = within(tabs).getByTestId('avatar-agent-tab-claude');
+    expect(codexTab.getAttribute('aria-checked')).toBe('true');
+    expect(claudeTab.getAttribute('aria-checked')).toBe('false');
+
+    // Re-picking the active CLI is not a change.
+    fireEvent.click(codexTab);
+    expect(onAgentChange).not.toHaveBeenCalled();
+
+    fireEvent.click(claudeTab);
+    expect(onAgentChange).toHaveBeenCalledWith('claude');
+  });
+
+  it('keeps the CLI tabs reachable when the selected CLI is no longer installed', () => {
+    const { onAgentChange } = renderMenu({
+      config: { ...baseConfig, agentId: 'gemini', agentModels: {} },
+      agents: [
+        codexAgent,
+        claudeAgent,
+        {
+          id: 'gemini',
+          name: 'Gemini CLI',
+          bin: 'gemini',
+          available: false,
+          models: [{ id: 'default', label: 'Default (CLI config)' }],
+        },
+      ],
+    });
+
+    const menu = openMenu();
+    // An uninstalled CLI is not offered as a tab, and nothing reads as checked…
+    expect(within(menu).queryByTestId('avatar-agent-tab-gemini')).toBeNull();
+    expect(within(menu).queryByRole('radio', { checked: true })).toBeNull();
+    // …but the way onto an installed one is still there.
+    fireEvent.click(within(menu).getByTestId('avatar-agent-tab-claude'));
+    expect(onAgentChange).toHaveBeenCalledWith('claude');
   });
 
   it('changes reasoning effort from the composer popover', () => {

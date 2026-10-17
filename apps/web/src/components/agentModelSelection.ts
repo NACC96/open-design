@@ -63,6 +63,27 @@ export function reasoningPatchForModelChange<O extends { id: string }>(
     : { reasoning: undefined };
 }
 
+/**
+ * Apply a picker's `{ model, reasoning, serviceTier }` patch to a saved choice.
+ *
+ * An own `undefined` is an explicit clear (a model change dropping a tier or
+ * effort the next model does not offer); an absent key keeps the old value.
+ * Shared by the global app-config writer and the per-project writer so both
+ * surfaces treat a patch the same way.
+ */
+export function mergeAgentModelChoice(
+  previous: AgentModelChoice | undefined,
+  next: { model?: string; reasoning?: string; serviceTier?: string },
+): AgentModelChoice {
+  const merged = { ...(previous ?? {}), ...next };
+  for (const key of ['reasoning', 'serviceTier'] as const) {
+    if (Object.prototype.hasOwnProperty.call(next, key) && next[key] === undefined) {
+      delete merged[key];
+    }
+  }
+  return merged;
+}
+
 export function normalizeAgentModelChoice(
   agent: AgentModelSource,
   choice: AgentModelChoice | undefined,

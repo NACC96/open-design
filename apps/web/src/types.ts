@@ -280,6 +280,9 @@ export interface ByokProviderConfigDraft {
 // other one's choice. Missing entries fall back to the agent's first
 // declared model (`'default'` — let the CLI pick).
 export type AgentModelChoice = AgentModelPrefs;
+// The same choice pinned to one project, with the agent it belongs to. See
+// `ProjectExecutionChoice` in contracts and `state/project-execution.ts`.
+export type { ProjectExecutionChoice } from '@open-design/contracts';
 export type AgentCliEnvConfig = AgentCliEnvPrefs;
 export type AgentCliEnvIntentConfig = AgentCliEnvIntentPrefs;
 

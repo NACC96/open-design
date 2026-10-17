@@ -2061,6 +2061,7 @@ export const fa: Dict = {
   'avatar.amrConsoleMeta': 'موجودی و شارژ',
   'avatar.settings': 'تنظیمات',
   'avatar.backToProjects': 'بازگشت به پروژه‌ها',
+  'avatar.executionSaveFailed': 'ذخیره‌ی عامل انتخاب‌شده برای این پروژه انجام نشد.',
   'avatar.metaActive': 'فعال',
   'avatar.metaOffline': 'آفلاین',
   'avatar.metaSelected': 'انتخاب شده',

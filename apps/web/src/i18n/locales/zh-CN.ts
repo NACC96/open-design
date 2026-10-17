@@ -2152,6 +2152,7 @@ export const zhCN: Dict = {
   "avatar.amrConsoleMeta": "余额与充值",
   "avatar.settings": "设置",
   "avatar.backToProjects": "返回项目列表",
+  'avatar.executionSaveFailed': '无法保存此项目的智能体选择。',
   "avatar.metaActive": "使用中",
   "avatar.metaOffline": "未运行",
   "avatar.metaSelected": "已选",

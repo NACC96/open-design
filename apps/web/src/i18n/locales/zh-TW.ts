@@ -2160,6 +2160,7 @@ export const zhTW: Dict = {
   "avatar.amrConsoleMeta": "餘額與儲值",
   "avatar.settings": "設定",
   "avatar.backToProjects": "返回專案列表",
+  'avatar.executionSaveFailed': '無法儲存此專案的代理程式選擇。',
   "avatar.metaActive": "使用中",
   "avatar.metaOffline": "未執行",
   "avatar.metaSelected": "已選",

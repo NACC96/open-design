@@ -2061,6 +2061,7 @@ export const uk: Dict = {
   'avatar.amrConsoleMeta': 'Баланс і поповнення',
   'avatar.settings': 'Налаштування',
   'avatar.backToProjects': 'Назад до проектів',
+  'avatar.executionSaveFailed': 'Не вдалося зберегти вибраного агента для цього проєкту.',
   'avatar.metaActive': 'активно',
   'avatar.metaOffline': 'вимкнено',
   'avatar.metaSelected': 'вибрано',

@@ -2061,6 +2061,7 @@ export const ja: Dict = {
   'avatar.amrConsoleMeta': '残高とチャージ',
   'avatar.settings': '設定',
   'avatar.backToProjects': 'プロジェクトに戻る',
+  'avatar.executionSaveFailed': 'このプロジェクトのエージェント選択を保存できませんでした。',
   'avatar.metaActive': 'アクティブ',
   'avatar.metaOffline': 'オフライン',
   'avatar.metaSelected': '選択中',

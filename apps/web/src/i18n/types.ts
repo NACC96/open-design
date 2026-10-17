@@ -2759,6 +2759,7 @@ export interface Dict {
   'avatar.amrConsoleMeta': string;
   'avatar.settings': string;
   'avatar.backToProjects': string;
+  'avatar.executionSaveFailed': string;
   'avatar.metaActive': string;
   'avatar.metaOffline': string;
   'avatar.metaSelected': string;

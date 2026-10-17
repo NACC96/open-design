@@ -258,7 +258,7 @@ const PROJECT_RESOURCE_STRING_FLAGS = new Set([
   'workspace',
   'workspace-member',
 ]);
-const PROJECT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json', 'follow', 'thumbnail']);
+const PROJECT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json', 'follow', 'thumbnail', 'clear']);
 const WORKSPACE_STRING_FLAGS = new Set([
   'model',
   'daemon-url', 'workspace', 'view', 'visibility', 'owner', 'project',
@@ -6973,6 +6973,51 @@ function warnIfRequestedReasoningNotApplied(requested, data) {
   );
 }
 
+/**
+ * `od run start|redesign` without `--agent` runs on the project's own agent.
+ * When that agent is not available the daemon falls back (configured agent,
+ * then the first installed one) and reports it in `agentResolution`; say so on
+ * stderr so `--json` stdout stays machine-readable.
+ */
+function warnIfProjectAgentNotUsed(data) {
+  const resolution = data?.agentResolution;
+  if (!resolution || typeof resolution !== 'object') return;
+  const projectAgentId = resolution.projectAgentId;
+  if (typeof projectAgentId !== 'string' || !projectAgentId) return;
+  const fallback = resolution.source === 'app-config'
+    ? 'the configured agent'
+    : 'the first available agent';
+  console.error(
+    `[run] warning: this project runs on ${projectAgentId}, which is not available; `
+    + `the run uses ${fallback} (${resolution.agentId}) instead.`,
+  );
+}
+
+/** `--model` / `--reasoning` / `--service-tier` as `ProjectExecutionChoice` prefs. */
+function projectExecutionPrefsFromFlags(flags) {
+  const prefs = {};
+  if (typeof flags.model === 'string' && flags.model) prefs.model = flags.model;
+  if (typeof flags.reasoning === 'string' && flags.reasoning) prefs.reasoning = flags.reasoning;
+  if (typeof flags['service-tier'] === 'string' && flags['service-tier']) {
+    prefs.serviceTier = flags['service-tier'];
+  }
+  return prefs;
+}
+
+function describeProjectExecution(execution) {
+  if (!execution || typeof execution.agentId !== 'string' || !execution.agentId) {
+    return 'the configured agent';
+  }
+  const details = [
+    execution.model ? `model ${execution.model}` : null,
+    execution.reasoning ? `reasoning ${execution.reasoning}` : null,
+    execution.serviceTier ? `service tier ${execution.serviceTier}` : null,
+  ].filter(Boolean);
+  return details.length > 0
+    ? `${execution.agentId} (${details.join(', ')})`
+    : execution.agentId;
+}
+
 async function postJsonToDaemon(base, route, body, headers = {}) {
   let resp;
   try {
@@ -7016,6 +7061,18 @@ async function runProject(args) {
   od project create [--name "<title>"] [--skill <id>] [--design-system <id>]
                     [--plugin <id>] [--inputs <json>] [--metadata-json <path|->]
                     [--mode design|chat|plan]
+                    [--agent <id> [--model <id>] [--reasoning <level>]
+                    [--service-tier <id>]]
+                    The project runs on --agent; without it, the project
+                    follows the configured agent and its saved model.
+  od project set-agent <id> [--agent <id>] [--model <id>] [--reasoning <level>]
+                    [--service-tier <id>] [--json]
+                    Change the agent and model this project runs on. --agent
+                    replaces the whole choice; without it, the flags update
+                    the project's current agent.
+  od project set-agent <id> --clear [--json]
+                    Remove the project's agent choice; its runs then follow
+                    the configured agent.
   od project create-design-system <id> [--name "<title>"]
                     [--prompt "<text>" | --prompt-file <path|->] [--json]
                     Duplicate a project as a design-system workspace and seed
@@ -7219,6 +7276,13 @@ Common options:
       };
       const conversationMode = normalizeChatSessionModeFlag(flags.mode);
       if (conversationMode) body.conversationMode = conversationMode;
+      const executionPrefs = projectExecutionPrefsFromFlags(flags);
+      if (typeof flags.agent === 'string' && flags.agent) {
+        body.execution = { agentId: flags.agent, ...executionPrefs };
+      } else if (Object.keys(executionPrefs).length > 0) {
+        console.error('--model, --reasoning and --service-tier need --agent <id> on `od project create`.');
+        process.exit(2);
+      }
       if (flags['pending-prompt']) body.pendingPrompt = flags['pending-prompt'];
       if (flags['metadata-json']) {
         const mj = safeReadJsonFile(flags['metadata-json']);
@@ -7269,7 +7333,68 @@ Common options:
         process.exit(1);
       }
       if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
-      console.log(`[project] created ${data.project?.id ?? id} (conversation ${data.conversationId})`);
+      console.log(
+        `[project] created ${data.project?.id ?? id} (conversation ${data.conversationId}); `
+        + `runs on ${describeProjectExecution(data.project?.execution)}`,
+      );
+      return;
+    }
+    case 'set-agent': {
+      const id = positionalArgs(rest, PROJECT_RESOURCE_STRING_FLAGS)[0];
+      const executionPrefs = projectExecutionPrefsFromFlags(flags);
+      const agentId = typeof flags.agent === 'string' && flags.agent ? flags.agent : null;
+      const usage = 'Usage: od project set-agent <id> [--agent <id>] [--model <id>] [--reasoning <level>] [--service-tier <id>] | --clear [--json]';
+      if (!id) {
+        console.error(usage);
+        process.exit(2);
+      }
+      if (flags.clear && (agentId || Object.keys(executionPrefs).length > 0)) {
+        console.error('--clear cannot be combined with --agent, --model, --reasoning or --service-tier.');
+        process.exit(2);
+      }
+      if (!flags.clear && !agentId && Object.keys(executionPrefs).length === 0) {
+        console.error(usage);
+        process.exit(2);
+      }
+      let execution = null;
+      if (agentId) {
+        execution = { agentId, ...executionPrefs };
+      } else if (!flags.clear) {
+        // No --agent: update the project's current choice in place.
+        const infoResponse = await fetch(`${base}/api/projects/${encodeURIComponent(id)}`, {
+          headers: workspaceHeaders,
+        });
+        if (!infoResponse.ok) return structuredHttpFailure(infoResponse, 'project-not-found');
+        const info = await infoResponse.json();
+        const current = info?.project?.execution;
+        if (!current || typeof current.agentId !== 'string' || !current.agentId) {
+          console.error(
+            `Project ${id} has no agent of its own (it follows the configured agent). `
+            + 'Pass --agent <id> to choose one.',
+          );
+          process.exit(2);
+        }
+        execution = { ...current, ...executionPrefs };
+      }
+      let resp;
+      try {
+        resp = await fetch(`${base}/api/projects/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json', ...workspaceHeaders },
+          body: JSON.stringify({ execution }),
+        });
+      } catch (err) {
+        surfaceFetchError(err, base);
+        process.exit(3);
+      }
+      if (!resp.ok) return structuredHttpFailure(resp, 'project-not-found');
+      const data = await resp.json();
+      if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+      console.log(
+        execution
+          ? `[project] ${id} now runs on ${describeProjectExecution(data.project?.execution ?? execution)}`
+          : `[project] ${id} now follows the configured agent`,
+      );
       return;
     }
     case 'create-design-system': {
@@ -7835,6 +7960,9 @@ async function runRun(args) {
                [--skill <id>[,<id>]] [--plugin <id>] [--inputs <json>] [--grant-caps a,b]
                [--agent claude|codex|opencode] [--model <id>] [--reasoning <level>] [--service-tier <id>]
                [--workspace <id> --workspace-member <id>] [--follow] [--json]
+               --agent defaults to the project's agent (od project set-agent),
+               then the configured agent. Without --model / --reasoning /
+               --service-tier the project's own choices apply.
   od run redesign [--path <folder>] [--message "<text>" | --prompt-file <path|->]
                [--agent claude] [--model <id>] [--reasoning <level>] [--service-tier <id>] [--follow] [--json]
   od run watch  <runId>                     ND-JSON event stream on stdout.
@@ -8093,6 +8221,7 @@ Common options:
       };
       const data = await postJsonToDaemon(base, '/api/runs', body, workspaceHeaders);
       warnIfRequestedReasoningNotApplied(flags.reasoning, data);
+      warnIfProjectAgentNotUsed(data);
       if (flags.json && !flags.follow) {
         return process.stdout.write(JSON.stringify({
           ...data,
@@ -8164,6 +8293,7 @@ Common options:
         process.exit(1);
       }
       warnIfRequestedReasoningNotApplied(flags.reasoning, data);
+      warnIfProjectAgentNotUsed(data);
       if (flags.json && !flags.follow) {
         return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
       }

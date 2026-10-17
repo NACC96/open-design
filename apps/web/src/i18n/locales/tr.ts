@@ -2061,6 +2061,7 @@ export const tr: Dict = {
   'avatar.amrConsoleMeta': 'Bakiye ve yükleme',
   'avatar.settings': 'Ayarlar',
   'avatar.backToProjects': 'Projelere dön',
+  'avatar.executionSaveFailed': 'Bu projenin ajan seçimi kaydedilemedi.',
   'avatar.metaActive': 'aktif',
   'avatar.metaOffline': 'çevrim dışı',
   'avatar.metaSelected': 'seçildi',

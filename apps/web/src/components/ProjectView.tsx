@@ -279,6 +279,7 @@ import type {
   DesignSystemSummary,
   OpenTabsState,
   Project,
+  ProjectExecutionChoice,
   ProjectMetadata,
   PreviewComment,
   PreviewCommentAttachment,
@@ -414,6 +415,14 @@ import {
   subscribeHomeAttachmentUploads,
 } from '../state/home-attachment-handoff';
 import { effectiveAgentModelChoice, effectiveAgentModelId } from './agentModelSelection';
+import {
+  effectiveProjectExecution,
+  nextProjectExecutionForAgent,
+  nextProjectExecutionForChoice,
+  projectRunConfig,
+  sameProjectExecution,
+  withProjectExecution,
+} from '../state/project-execution';
 import { mediaExecutionPolicyForProjectMetadata } from '../media/execution-policy';
 import { mediaModelProviderId } from '../media/models';
 import { byokProviderRequiresApiKey } from '../utils/byokProvider';
@@ -2117,15 +2126,16 @@ export function ProjectView({
   resolveAuthoritativeProjectName,
   routeFileName,
   routeConversationId = null,
-  config,
+  config: globalConfig,
   agents,
   skills,
   designTemplates,
   designSystems,
   daemonLive,
   onModeChange,
-  onAgentChange,
-  onAgentModelChange,
+  // `onAgentChange` / `onAgentModelChange` write the app-wide default; this
+  // view deliberately never calls them — its picker writes the project's own
+  // stamp (`commitProjectExecution`).
   onApiModelChange,
   onRefreshAgents,
   onOpenSettings,
@@ -2154,6 +2164,36 @@ export function ProjectView({
   onCreationHandoffSettled,
 }: Props) {
   const { locale, t } = useI18n();
+  // Per-project agent + model. `globalConfig` is the app-wide default (the
+  // Home picker's last pick, the default for NEW projects); `config` is that
+  // default as seen from THIS project — its own stamped agent and model when it
+  // has one. Every read below goes through the project-scoped `config`, and the
+  // composer's picker writes only this project's stamp
+  // (`commitProjectExecution`), never app-config. `executionOverride` holds an
+  // optimistic write so a stale `onProjectChange({...project})` from an older
+  // closure (the auto-title flow, for one) cannot flip the chip back.
+  const [executionOverride, setExecutionOverride] = useState<{
+    projectId: string;
+    value: ProjectExecutionChoice | null;
+  } | null>(null);
+  const executionStamp =
+    executionOverride?.projectId === project.id
+      ? executionOverride.value
+      : project.execution ?? null;
+  const executionStampRef = useRef(executionStamp);
+  executionStampRef.current = executionStamp;
+  const effectiveExecution = useMemo(
+    () => effectiveProjectExecution(executionStamp, globalConfig),
+    [executionStamp, globalConfig],
+  );
+  const effectiveExecutionRef = useRef(effectiveExecution);
+  effectiveExecutionRef.current = effectiveExecution;
+  const globalConfigRef = useRef(globalConfig);
+  globalConfigRef.current = globalConfig;
+  const config = useMemo(
+    () => withProjectExecution(globalConfig, effectiveExecution),
+    [globalConfig, effectiveExecution],
+  );
   const amrAuthRetryMountIdRef = useRef<string | null>(null);
   if (amrAuthRetryMountIdRef.current === null) {
     amrAuthRetryMountIdRef.current = randomUUID();
@@ -8401,6 +8441,15 @@ export function ProjectView({
       meta?: ProjectChatSendMeta,
       baseMessages?: ChatMessage[],
     ) => {
+      // The project's agent + model as of THIS send, not as of this callback's
+      // closure: a pick made an instant ago (the error card's switch-model-
+      // then-retry path calls straight through) must already apply.
+      const config = projectRunConfig(
+        globalConfigRef.current,
+        effectiveExecutionRef.current,
+        meta?.strategyTaskExecutionId,
+        messages,
+      );
       if (projectMutationReadOnly) return false;
       if (!activeConversationId) return false;
       if (messagesConversationIdRef.current !== activeConversationId) return false;
@@ -13591,6 +13640,44 @@ export function ProjectView({
 
   // CLI / agent selector lives below the chat conversation (composer footer),
   // not in the top-right header.
+  // Writes are chained per view so they land in pick order; a failed write
+  // rolls back only when no newer pick has superseded it.
+  const executionWriteChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const executionWriteSeqRef = useRef(0);
+  const commitProjectExecution = useCallback(
+    (next: ProjectExecutionChoice) => {
+      const projectId = project.id;
+      const previousStamp = executionStampRef.current;
+      if (previousStamp && sameProjectExecution(previousStamp, next)) return;
+      const seq = executionWriteSeqRef.current + 1;
+      executionWriteSeqRef.current = seq;
+      executionStampRef.current = next;
+      effectiveExecutionRef.current = next;
+      setExecutionOverride({ projectId, value: next });
+      onProjectChange({ ...projectRef.current, execution: next });
+      const workspaceContext = projectRunWorkspaceContextRef.current;
+      executionWriteChainRef.current = executionWriteChainRef.current
+        .catch(() => undefined)
+        .then(() => patchProject(projectId, { execution: next }, workspaceContext))
+        .then((saved) => {
+          if (saved || executionWriteSeqRef.current !== seq) return;
+          setExecutionOverride({ projectId, value: previousStamp });
+          if (projectRef.current.id === projectId) {
+            onProjectChange({
+              ...projectRef.current,
+              execution: previousStamp ?? undefined,
+            });
+          }
+          setProjectActionsToast({
+            message: t('avatar.executionSaveFailed'),
+            details: null,
+            tone: 'error',
+          });
+        });
+    },
+    [onProjectChange, project.id, t],
+  );
+
   const executionControls = (
     <>
       <AvatarMenu
@@ -13614,7 +13701,14 @@ export function ProjectView({
             agent_id: id,
             ...(project?.id ? { project_id: project.id } : {}),
           });
-          onAgentChange(id);
+          commitProjectExecution(
+            nextProjectExecutionForAgent(
+              effectiveExecutionRef.current,
+              id,
+              globalConfigRef.current,
+              agents,
+            ),
+          );
         }}
         onAgentModelChange={(agentId, choice) => {
           trackComposerBarClick(analytics.track, {
@@ -13625,7 +13719,9 @@ export function ProjectView({
             ...(choice?.model ? { model_id: choice.model } : {}),
             ...(project?.id ? { project_id: project.id } : {}),
           });
-          onAgentModelChange(agentId, choice);
+          commitProjectExecution(
+            nextProjectExecutionForChoice(effectiveExecutionRef.current, agentId, choice),
+          );
           /*
            * 「选完自动重跑」的那一半。只有确实是从报错卡那颗〔更换模型〕进来的
            * 才会有待重跑的那一轮 —— 平时手动换模型不该无端重发。
