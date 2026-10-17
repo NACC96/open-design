@@ -1,0 +1,89 @@
+/* Settings → Models & providers → Model prices editor (a disclosure). */
+
+.toggle {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toggleText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.chevron,
+.chevronOpen {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--text-muted);
+  transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+.table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.headRow,
+.row {
+  display: grid;
+  grid-template-columns: minmax(160px, 2fr) repeat(4, minmax(72px, 1fr)) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.headRow {
+  font-size: var(--font-size-12, 12px);
+  color: var(--text-muted);
+}
+
+.row[data-invalid] input {
+  border-color: var(--red);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.status {
+  font-size: var(--font-size-12, 12px);
+  color: var(--text-muted);
+}
+
+.empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}

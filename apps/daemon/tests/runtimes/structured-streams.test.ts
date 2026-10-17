@@ -1153,6 +1153,28 @@ describe('structured agent stream fixtures', () => {
     ))).toEqual([{ type: 'thinking_delta', delta: 'Plan from wrapper.' }]);
   });
 
+  it('marks Claude result total_cost_usd as a session running total', () => {
+    const events: unknown[] = [];
+    const handler = createClaudeStreamHandler((event: unknown) => events.push(event));
+    handler.feed(`${JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      usage: { input_tokens: 18, output_tokens: 285 },
+      total_cost_usd: 0.0508008,
+      modelUsage: { 'claude-sonnet-4-5': { inputTokens: 18, outputTokens: 285, costUSD: 0.0508008 } },
+    })}\n`);
+    handler.flush();
+
+    expect(events).toContainEqual({
+      type: 'usage',
+      usage: { input_tokens: 18, output_tokens: 285 },
+      costUsd: 0.0508008,
+      costScope: 'session_cumulative',
+      durationMs: null,
+      stopReason: null,
+    });
+  });
+
   it('maps Claude result terminal_reason into usage stopReason', () => {
     const events: unknown[] = [];
     const handler = createClaudeStreamHandler((event: unknown) => events.push(event));
@@ -1169,6 +1191,7 @@ describe('structured agent stream fixtures', () => {
       type: 'usage',
       usage: null,
       costUsd: null,
+      costScope: 'session_cumulative',
       durationMs: 42,
       stopReason: 'completed',
     });

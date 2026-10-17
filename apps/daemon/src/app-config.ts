@@ -21,7 +21,11 @@ import { readFileSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
-import type { OdNextRolloutMode } from '@open-design/contracts';
+import {
+  isValidModelTokenPrice,
+  type ModelTokenPrice,
+  type OdNextRolloutMode,
+} from '@open-design/contracts';
 
 import { normalizeLocalAgentId } from './runtimes/local-ai-policy.js';
 import { expandHomePrefix } from './home-expansion.js';
@@ -137,11 +141,18 @@ export interface AppConfigPrefs {
   // `metadata.linkedDirs` (read-only `--add-dir` awareness, no Design Files
   // import). Stored most-recent-first; capped at RECENT_LINKED_DIRS_MAX.
   recentLinkedDirs?: string[];
+  // User price overrides for project spend estimates, keyed by model id.
+  // Capped at MODEL_PRICE_OVERRIDES_MAX entries.
+  modelPriceOverrides?: Record<string, ModelTokenPrice>;
 }
 
 // Cap on how many recent working directories we remember. Keeps the picker's
 // "Recent" submenu short and the config file bounded.
 export const RECENT_LINKED_DIRS_MAX = 5;
+
+// Cap on user model price overrides; keeps the config file bounded.
+export const MODEL_PRICE_OVERRIDES_MAX = 200;
+const MODEL_PRICE_OVERRIDE_KEY_MAX = 200;
 
 const ALLOWED_KEYS: ReadonlySet<keyof AppConfigPrefs> = new Set([
   'onboardingCompleted',
@@ -163,6 +174,7 @@ const ALLOWED_KEYS: ReadonlySet<keyof AppConfigPrefs> = new Set([
   'defaultProjectLocationId',
   'odNextStrategyMode',
   'recentLinkedDirs',
+  'modelPriceOverrides',
 ] as const);
 
 function configFile(dataDir: string): string {
@@ -190,6 +202,32 @@ const TELEMETRY_KEYS: ReadonlySet<string> = new Set([
   'content',
   'artifactManifest',
 ]);
+
+// Keep well-formed entries only: a non-empty key and a price with finite,
+// non-negative input/output (cache rates optional). Unknown fields are dropped
+// so the stored shape stays exactly `ModelTokenPrice`.
+function validateModelPriceOverrides(
+  raw: unknown,
+): Record<string, ModelTokenPrice> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const result: Record<string, ModelTokenPrice> = {};
+  let count = 0;
+  for (const [rawKey, value] of Object.entries(raw as Record<string, unknown>)) {
+    const key = rawKey.trim();
+    if (!key || key.length > MODEL_PRICE_OVERRIDE_KEY_MAX) continue;
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+    if (!isValidModelTokenPrice(value)) continue;
+    result[key] = {
+      input: value.input,
+      output: value.output,
+      ...(value.cacheRead === undefined ? {} : { cacheRead: value.cacheRead }),
+      ...(value.cacheWrite === undefined ? {} : { cacheWrite: value.cacheWrite }),
+    };
+    count += 1;
+    if (count >= MODEL_PRICE_OVERRIDES_MAX) break;
+  }
+  return count > 0 ? result : undefined;
+}
 
 function validateTelemetry(raw: unknown): TelemetryPrefs | undefined {
   if (raw === undefined || raw === null) return undefined;
@@ -672,6 +710,15 @@ function applyConfigValue(
       delete target[key];
     } else {
       target[key] = OD_NEXT_MODE_WHEN_CONFIG_UNREADABLE;
+    }
+    return;
+  }
+  if (key === 'modelPriceOverrides') {
+    const validated = validateModelPriceOverrides(value);
+    if (validated !== undefined) {
+      target[key] = validated;
+    } else {
+      delete target[key];
     }
     return;
   }

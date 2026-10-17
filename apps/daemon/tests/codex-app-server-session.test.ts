@@ -105,6 +105,27 @@ describe('codex app-server session', () => {
       }
     });
 
+    it('reports the model codex resolved for the thread, even on the CLI default', () => {
+      for (const resumeSessionId of [null, 'existing-thread']) {
+        const { child, agentEvents } = harness({ model: 'default', resumeSessionId });
+        child.say({ id: child.sent('initialize')?.id, result: { userAgent: 'codex/0.153.4' } });
+        const thread = child.sent('thread/start') ?? child.sent('thread/resume');
+        child.say({ id: thread?.id, result: { thread: { id: 'th-model' }, model: 'gpt-6.1-sol', modelProvider: 'openai' } });
+        expect(agentEvents).toContainEqual({ type: 'status', label: 'model', model: 'gpt-6.1-sol' });
+      }
+      const { child, agentEvents } = harness();
+      completeHandshake(child);
+      expect(agentEvents.some((e) => e.type === 'status' && e.label === 'model')).toBe(false);
+    });
+
+    it('does not report the thread model when the run chose its own, which turn/start applies', () => {
+      const { child, agentEvents } = harness({ model: 'gpt-6-luna' });
+      child.say({ id: child.sent('initialize')?.id, result: { userAgent: 'codex/0.153.4' } });
+      child.say({ id: child.sent('thread/start')?.id, result: { thread: { id: 'th-model' }, model: 'gpt-6.1-sol' } });
+      expect(child.sent('turn/start')?.params).toMatchObject({ model: 'gpt-6-luna' });
+      expect(agentEvents.some((e) => e.type === 'status' && e.label === 'model')).toBe(false);
+    });
+
     it('does not start a turn when cancellation races the handshake', () => {
       const { child, session } = harness();
       session.abort();

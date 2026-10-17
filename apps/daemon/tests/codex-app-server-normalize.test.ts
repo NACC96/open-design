@@ -579,7 +579,7 @@ describe('codex app-server -> OpenDesign event normalization', () => {
       expect(events).toEqual([
         {
           type: 'usage',
-          usageScope: 'sessionCumulative', evaluationTurnUsage: null,
+          usageScope: 'sessionCumulative', evaluationTurnUsage: null, turnTokenUsage: null,
           usage: {
             input_tokens: 16412,
             output_tokens: 188,

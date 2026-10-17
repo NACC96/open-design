@@ -4022,13 +4022,15 @@ function buildBlocks(events: AgentEvent[]): Block[] {
         ev.label === "thinking" ||
         ev.label === "empty_response" ||
         /*
-         * `model` —— **AMR(ACP)独有**的一条运行时标记,不是助手内容。
+         * `model` —— ACP 与 codex app-server 的一条运行时标记,不是助手内容。
          *
          * `apps/daemon/src/agent-protocol/acp/session.ts` 在 `session/new`、
          * `session/set_model` 完成、以及选型失败回落时各发一次
-         * `{ label: 'model', model: <当前模型> }`;`providers/daemon.ts` 把
-         * `model` 折进 `detail`。走 stdout 协议的 runtime(claude / codex /
-         * opencode …)一条都不发,所以这一行只在 AMR 那一路冒出来。
+         * `{ label: 'model', model: <当前模型> }`;codex app-server
+         * (`agent-protocol/codex-app-server/session.ts`)在 `thread/start` /
+         * `thread/resume` 应答里拿到实际模型时也发一次。`providers/daemon.ts`
+         * 把 `model` 折进 `detail`。其余走 stdout 协议的 runtime(claude /
+         * opencode …)一条都不发。
          *
          * 它无条件戳在**一轮的最下面**,内容是模型 id —— 而模型身份输入区的
          * 模型芯片上已经写着了。用户 2026-08-27:「这个模型的标识可以去掉」。

@@ -14,6 +14,8 @@ import {
   boundPersistedAgentEvent,
   serializeRunEventsForStorage,
 } from './run-event-payload-budget.js';
+import { recordRunUsageEvent } from '../spend/run-usage-recorder.js';
+import { usageFamilyOfAgent } from '../spend/agent-usage-family.js';
 
 type SqliteDb = Database.Database;
 
@@ -245,6 +247,7 @@ export function persistRunEventToAssistantMessage(
 ): void {
   if (!run.assistantMessageId) return;
   if (event === 'start') retireSupersededAttemptProse(db, run);
+  recordRunUsageEvent(db, run, event, data, usageFamilyOfAgent);
   const persisted = runSseEventToPersistedAgentEvent(event, data);
   if (!persisted) {
     if (event === 'end' || event === 'close') flushRunMessageEvents(run);

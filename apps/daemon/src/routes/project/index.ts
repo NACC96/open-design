@@ -127,6 +127,7 @@ import {
 import { auditDesignSystemPackage } from '../../tools-connectors-cli.js';
 import { parseOrchestratorWorkspace } from '../../workspace-contract.js';
 import { registerProjectConversationRoutes } from './conversations.js';
+import { registerProjectSpendRoutes } from './spend.js';
 import { workspaceProjectGroupCountProperties } from './analytics.js';
 import type { ProjectCommentWorkspaceContextResolution } from './comments.js';
 import {
@@ -5767,6 +5768,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
     authorizeProjectRequest,
     sendApiError,
   });
+  registerProjectSpendRoutes(app, { ...ctx, authorizeProjectRequest });
 
   // ---- Tabs -----------------------------------------------------------------
 

@@ -47,6 +47,7 @@ import { migrateCritique } from './critique/persistence.js';
 import { migrateMediaTasks } from './media/tasks.js';
 import { migrateLibrary } from './library-store.js';
 import { migratePlugins } from './plugins/persistence.js';
+import { migrateRunUsage } from './spend/run-usage-store.js';
 import { migrateProjectScenarioBindings } from './plugins/scenario-binding.js';
 import { emittedRenderableQuestionForm } from './question-form-detect.js';
 import {
@@ -632,6 +633,7 @@ function migrate(db: SqliteDb): void {
   migrateCommentRelayOutbox(db);
   migrateAmrTerminalReportOutbox(db);
   migratePublicFilePublications(db);
+  migrateRunUsage(db);
 }
 
 /**
