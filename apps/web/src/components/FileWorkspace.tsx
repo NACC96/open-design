@@ -337,6 +337,7 @@ interface Props {
   // launcher affordance to create new side chats — only persisted `chat:` tabs
   // are restored.
   chatConfig?: AppConfig;
+  chatExecutionReady?: () => Promise<AppConfig>;
   chatAgentsById?: Map<string, AgentInfo>;
   handoffAgents?: AgentInfo[];
   handoffArtifactId?: string;
@@ -1374,6 +1375,7 @@ export function FileWorkspace({
   commentPortalId,
   onCommentModeChange,
   chatConfig,
+  chatExecutionReady,
   chatAgentsById,
   handoffAgents,
   handoffArtifactId,
@@ -4550,6 +4552,7 @@ export function FileWorkspace({
             projectId={projectId}
             conversationId={conversationIdFromSideChatTabId(activeTab)}
             config={chatConfig}
+            executionReady={chatExecutionReady}
             agentsById={chatAgentsById}
             locale={chatLocale ?? 'en'}
             workspaceContext={workspaceContext}

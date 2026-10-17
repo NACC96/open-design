@@ -274,6 +274,10 @@ function createRunsServiceStub() {
         conversationId: typeof meta.conversationId === 'string' ? meta.conversationId : null,
         assistantMessageId: typeof meta.assistantMessageId === 'string' ? meta.assistantMessageId : null,
         agentId: typeof meta.agentId === 'string' ? meta.agentId : null,
+        model: meta.model,
+        reasoning: meta.reasoning,
+        serviceTier: meta.serviceTier,
+        executionSnapshot: meta.executionSnapshot,
         message: meta.message,
         currentPrompt: meta.currentPrompt,
         appliedPluginSnapshotId: meta.appliedPluginSnapshotId,
@@ -2275,4 +2279,20 @@ describe('POST /api/runs — one-time Personal adoption for signed-in AMR', () =
       getWorkspaceProjectByProjectId(openDatabase(tempDir!), UNBOUND_PROJECT),
     ).toBeUndefined();
   });
+});
+
+it.each(['/api/runs', '/api/chat'])('keeps the accepted model for clarification through %s', async (route) => {
+  const baseUrl = await startServer();
+  seedAwaitingClarificationTask();
+  runsServiceStub!.get('run-strategy-request')!.executionSnapshot = { agentId: 'codex', model: 'astra', reasoning: 'high' };
+  const response = await fetch(`${baseUrl}${route}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      taskExecutionId: 'task-strategy-clarification', projectId: PERSONAL_PROJECT,
+      conversationId: 'conversation-strategy', agentId: 'codex', model: 'sol', reasoning: 'low',
+      userMessageId: 'user-strategy-answer', assistantMessageId: 'assistant-strategy-answer',
+      clientRequestId: 'client-strategy-answer', message: 'Desktop workspace', currentPrompt: 'Desktop workspace',
+    }),
+  });
+  expect(response.status, await response.text()).toBe(202);
+  expect(lastCreatedRun).toMatchObject({ model: 'astra', reasoning: 'high', serviceTier: null });
 });

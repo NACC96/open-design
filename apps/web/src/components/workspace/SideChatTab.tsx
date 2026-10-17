@@ -74,6 +74,7 @@ interface Props {
   /** Live app config + agent map + locale, threaded from ProjectView so the
    *  side chat runs against the same agent selection as the primary chat. */
   config: AppConfig;
+  executionReady?: () => Promise<AppConfig>;
   agentsById: Map<string, AgentInfo>;
   locale: string;
   /** The caller's current workspace identity, forwarded to `streamViaDaemon`
@@ -111,6 +112,7 @@ export function SideChatTab({
   projectId,
   conversationId,
   config,
+  executionReady,
   agentsById,
   locale,
   workspaceContext,
@@ -133,6 +135,7 @@ export function SideChatTab({
     conversations.find((conversation) => conversation.id === conversationId)?.sessionMode
     ?? 'design';
   const chat = useConversationChat(projectId, conversationId, {
+    executionReady,
     config,
     agentsById,
     locale,

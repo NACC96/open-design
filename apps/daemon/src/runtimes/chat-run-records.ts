@@ -157,6 +157,7 @@ export interface SseClient {
 }
 
 export interface ChatRun {
+  executionSnapshot?: import('@open-design/contracts').ProjectExecutionChoice;
   id: string;
   diagnosticIncidentIds?: string[];
   projectId: string | null;

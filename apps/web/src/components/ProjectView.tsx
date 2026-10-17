@@ -420,6 +420,7 @@ import {
   nextProjectExecutionForAgent,
   nextProjectExecutionForChoice,
   projectRunConfig,
+  projectExecutionFromConfig,
   sameProjectExecution,
   withProjectExecution,
 } from '../state/project-execution';
@@ -2188,6 +2189,23 @@ export function ProjectView({
   );
   const effectiveExecutionRef = useRef(effectiveExecution);
   effectiveExecutionRef.current = effectiveExecution;
+  const executionWriteChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const executionWriteSeqRef = useRef(0);
+  const executionWriteProjectRef = useRef(project.id);
+  if (executionWriteProjectRef.current !== project.id) {
+    executionWriteProjectRef.current = project.id;
+    executionWriteSeqRef.current++;
+    executionWriteChainRef.current = Promise.resolve(true);
+  }
+  const waitForProjectExecution = useCallback(async () => {
+    let pending: Promise<boolean>;
+    let saved: boolean;
+    do {
+      pending = executionWriteChainRef.current;
+      saved = await pending;
+    } while (pending !== executionWriteChainRef.current);
+    return saved && executionWriteProjectRef.current === project.id;
+  }, [project.id]);
   const globalConfigRef = useRef(globalConfig);
   globalConfigRef.current = globalConfig;
   const config = useMemo(
@@ -8444,6 +8462,7 @@ export function ProjectView({
       // The project's agent + model as of THIS send, not as of this callback's
       // closure: a pick made an instant ago (the error card's switch-model-
       // then-retry path calls straight through) must already apply.
+      if (!await waitForProjectExecution()) return false;
       const config = projectRunConfig(
         globalConfigRef.current,
         effectiveExecutionRef.current,
@@ -10690,6 +10709,7 @@ export function ProjectView({
       }
     },
     [
+      waitForProjectExecution,
       attachedComments,
       supersedeRetriedError,
       activeConversationId,
@@ -13642,8 +13662,7 @@ export function ProjectView({
   // not in the top-right header.
   // Writes are chained per view so they land in pick order; a failed write
   // rolls back only when no newer pick has superseded it.
-  const executionWriteChainRef = useRef<Promise<unknown>>(Promise.resolve());
-  const executionWriteSeqRef = useRef(0);
+
   const commitProjectExecution = useCallback(
     (next: ProjectExecutionChoice) => {
       const projectId = project.id;
@@ -13657,10 +13676,14 @@ export function ProjectView({
       onProjectChange({ ...projectRef.current, execution: next });
       const workspaceContext = projectRunWorkspaceContextRef.current;
       executionWriteChainRef.current = executionWriteChainRef.current
-        .catch(() => undefined)
+        .catch(() => false)
         .then(() => patchProject(projectId, { execution: next }, workspaceContext))
+        .catch(() => null)
         .then((saved) => {
-          if (saved || executionWriteSeqRef.current !== seq) return;
+          if (saved) return true;
+          if (executionWriteSeqRef.current !== seq || executionWriteProjectRef.current !== projectId) return false;
+          executionStampRef.current = previousStamp;
+          effectiveExecutionRef.current = effectiveProjectExecution(previousStamp, globalConfigRef.current);
           setExecutionOverride({ projectId, value: previousStamp });
           if (projectRef.current.id === projectId) {
             onProjectChange({
@@ -13673,6 +13696,7 @@ export function ProjectView({
             details: null,
             tone: 'error',
           });
+          return false;
         });
     },
     [onProjectChange, project.id, t],
@@ -13681,6 +13705,10 @@ export function ProjectView({
   const executionControls = (
     <>
       <AvatarMenu
+        onUseDefault={() => {
+          const choice = projectExecutionFromConfig(globalConfigRef.current, agents);
+          if (choice) commitProjectExecution(choice);
+        }}
         config={config}
         agents={agents}
         daemonLive={daemonLive}
@@ -14243,6 +14271,10 @@ export function ProjectView({
             />
           ) : null}
           chatConfig={config}
+          chatExecutionReady={async () => {
+            if (!await waitForProjectExecution()) throw new Error(t('avatar.executionSaveFailed'));
+            return withProjectExecution(globalConfigRef.current, effectiveExecutionRef.current);
+          }}
           chatAgentsById={agentsById}
           handoffAgents={agents}
           handoffArtifactId={headerArtifact.artifact_id}

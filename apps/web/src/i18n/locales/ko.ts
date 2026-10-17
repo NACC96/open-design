@@ -1,6 +1,7 @@
 import type { Dict } from '../types';
 
 export const ko: Dict = {
+  'avatar.useAppDefault': 'Use current default',
   'billing.wallet': '지갑 잔액',
   'billing.codingPlanDesignPlan': 'Design Plan',
   'billing.codingPlanPeriodHours': '{count}시간',

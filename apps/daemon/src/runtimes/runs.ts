@@ -580,6 +580,7 @@ function durableRunState(run) {
       ? { strategyRolloutDecision: run.strategyRolloutDecision }
       : {}),
     agentId: run.agentId,
+    executionSnapshot: run.executionSnapshot,
     ...(Array.isArray(run.diagnosticIncidentIds) ? { diagnosticIncidentIds: run.diagnosticIncidentIds } : {}),
     ...(run.appVersionInfo ? { appVersionInfo: run.appVersionInfo } : {}),
     status: run.status,
@@ -976,6 +977,7 @@ export function createChatRunService({
         && !Array.isArray(meta.strategyRolloutDecision)
           ? meta.strategyRolloutDecision
           : null,
+      executionSnapshot: meta.executionSnapshot,
       agentId: typeof meta.agentId === 'string' && meta.agentId ? meta.agentId : null,
       appVersionInfo,
       projectMetadata:

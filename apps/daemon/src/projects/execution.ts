@@ -263,3 +263,19 @@ export function inheritedRunPrefsFromProjectExecution(
   if (!hasValue(request.serviceTier) && stamp.serviceTier) inherited.serviceTier = stamp.serviceTier;
   return inherited;
 }
+
+/** Freeze the launch preferences at request acceptance, including CLI default. */
+export function snapshotRunExecution(
+  agentId: string,
+  project: ProjectExecutionHolder | null | undefined,
+  appConfig: ProjectExecutionAppConfig | null | undefined,
+  request: { model?: unknown; reasoning?: unknown; serviceTier?: unknown },
+): ProjectExecutionChoice {
+  const defaults = resolveRunExecutionDefaults(agentId, project, appConfig);
+  const inherited = inheritedRunPrefsFromProjectExecution(agentId, project, request);
+  const text = (value: unknown) => typeof value === 'string' && value.length > 0 ? value : undefined;
+  const model = text(request.model) ?? defaults.model ?? 'default';
+  const reasoning = text(request.reasoning) ?? inherited.reasoning;
+  const serviceTier = text(request.serviceTier) ?? inherited.serviceTier;
+  return { agentId, model, ...(reasoning ? { reasoning } : {}), ...(serviceTier ? { serviceTier } : {}) };
+}

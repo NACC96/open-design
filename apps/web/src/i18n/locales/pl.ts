@@ -1,6 +1,7 @@
 import type { Dict } from '../types';
 
 export const pl: Dict = {
+  'avatar.useAppDefault': 'Use current default',
   'billing.wallet': 'Saldo portfela',
   'billing.codingPlanDesignPlan': 'Design Plan',
   'billing.codingPlanPeriodHours': '{count} godz.',

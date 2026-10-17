@@ -39,9 +39,9 @@ import type { AnalyticsContext } from '../analytics.js';
 import { spawnEnvForAgent } from '../agents.js';
 import { agentCliEnvForAgent, readAppConfig } from '../app-config.js';
 import {
-  inheritedRunPrefsFromProjectExecution,
   pickRunAgentId,
   resolveRunExecutionDefaults,
+  snapshotRunExecution,
 } from '../projects/execution.js';
 import type { AuthorizeProjectRequest } from '../collab/project-request-authority.js';
 import {
@@ -864,6 +864,7 @@ function withoutSensitiveRunInput(body: JsonRecord): JsonRecord {
   const sanitized = { ...body };
   delete sanitized.byokProvider;
   delete sanitized.byokProfileId;
+  delete sanitized.executionSnapshot;
   delete sanitized.apiKey;
   delete sanitized.rechargeResumeCapability;
   // Workspace scope is a server-issued authorization fact, not a request option.
@@ -1408,6 +1409,28 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
     };
   }
 
+  function priorRunExecution(request: JsonRecord) {
+    if (typeof request.clientRequestId !== 'string' || !request.clientRequestId) return undefined;
+    return design.runs.list({
+      projectId: typeof request.projectId === 'string' ? request.projectId : undefined,
+      conversationId: typeof request.conversationId === 'string' ? request.conversationId : undefined,
+    }).find((run) => run.clientRequestId === request.clientRequestId)?.executionSnapshot;
+  }
+
+  async function pinRunExecution(meta: RunCreateMeta, project: ProjectRecord | null): Promise<void> {
+    if (typeof meta.agentId !== 'string' || !meta.agentId) return;
+    let snapshot = meta.executionSnapshot as import('@open-design/contracts').ProjectExecutionChoice | undefined;
+    if (!snapshot) {
+      const prefs = await readAppConfig(RUNTIME_DATA_DIR);
+      const prior = priorRunExecution(meta);
+      snapshot = snapshotRunExecution(meta.agentId, prior ? { execution: prior } : project, prefs, { model: meta.model, reasoning: meta.reasoning, serviceTier: meta.serviceTier });
+    }
+    meta.executionSnapshot = snapshot;
+    meta.model = snapshot.model ?? 'default';
+    meta.reasoning = snapshot.reasoning ?? null;
+    meta.serviceTier = snapshot.serviceTier ?? null;
+  }
+
   function applyClarificationContinuationMeta(
     meta: RunCreateMeta,
     continuation: ClarificationContinuation,
@@ -1423,6 +1446,8 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
     });
     meta.taskExecutionId = task.taskExecutionId;
     meta.agentId = task.selectedAgentId;
+    const sourceExecution = design.runs.get(sourceRunId)?.executionSnapshot;
+    if (sourceExecution) meta.executionSnapshot = sourceExecution;
     meta.appliedPluginSnapshotId = task.snapshotId;
     meta.pluginId = task.strategyId;
     meta.message = instruction;
@@ -1846,6 +1871,10 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       ? clarificationResolution.value
       : null;
     const clarificationTask = clarificationContinuation?.task ?? null;
+    if (!clarificationTask && !requestBody.agentId) {
+      const prior = priorRunExecution(requestBody);
+      if (prior) requestBody.agentId = prior.agentId;
+    }
     // Read for its execution stamp only. The run's project record is re-read
     // below, after plugin snapshot resolution has had its chance to write the
     // row, so prompt/metadata decisions never see a pre-resolution snapshot.
@@ -2386,17 +2415,7 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
         agentResolution = lateResolution;
       }
     }
-    // A project stamped for this agent supplies the reasoning level / service
-    // tier the request left out (the model fallback itself lives in the run
-    // starter, so internal callers of it share the same rule).
-    Object.assign(
-      meta,
-      inheritedRunPrefsFromProjectExecution(meta.agentId, runProject, {
-        model: meta.model,
-        reasoning: meta.reasoning,
-        serviceTier: meta.serviceTier,
-      }),
-    );
+    await pinRunExecution(meta, runProject);
     if (!hasCompleteByokOpenCodeConfig({
       ...meta,
       ...(requestBody.byokProvider !== undefined
@@ -3912,6 +3931,10 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       ? clarificationResolution.value
       : null;
     const clarificationTask = clarificationContinuation?.task ?? null;
+    if (!clarificationTask && !requestBody.agentId) {
+      const prior = priorRunExecution(requestBody);
+      if (prior) requestBody.agentId = prior.agentId;
+    }
     if (!hasCompleteByokOpenCodeConfig({
       ...requestBody,
       ...(clarificationTask ? { agentId: clarificationTask.selectedAgentId } : {}),
@@ -3936,6 +3959,7 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
         clarificationContinuation.sourceRunId,
       )?.odNextTaskInputSnapshot ?? null;
     }
+    await pinRunExecution(meta, chatProject);
     const toolBundleSupport = validateRunToolBundleForAgent(
       toolBundle.bundle,
       typeof meta.agentId === 'string' ? getAgentDef(meta.agentId) : null,
