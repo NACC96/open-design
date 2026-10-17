@@ -80,6 +80,37 @@ export function antigravityQuotaGuidance(): string {
   return ANTIGRAVITY_QUOTA_GUIDANCE;
 }
 
+/**
+ * Why an Antigravity turn ended cleanly without any assistant text, when the
+ * evidence says so (#4281).
+ *
+ * agy reports missing sign-in and exhausted quota only in its `--log-file`, so
+ * `detail` should carry the stderr tail plus the log tail. Do not pass the raw
+ * stream-json stdout: it embeds tool output, which can quote any text.
+ *
+ * `cliPrintedNothing` enables the empirical fallback that a completely silent
+ * clean exit means missing sign-in. Only pass true when the process wrote no
+ * stdout at all; a run that streamed protocol frames demonstrably got past
+ * sign-in, so an unclassified silent turn there stays unclassified (null).
+ */
+export function classifyAntigravitySilentExit(
+  detail: string,
+  options: { cliPrintedNothing: boolean },
+): { code: 'AGENT_AUTH_REQUIRED' | 'RATE_LIMITED'; message: string } | null {
+  const auth = classifyAgentAuthFailure('antigravity', detail);
+  if (auth?.status === 'missing') {
+    return { code: 'AGENT_AUTH_REQUIRED', message: auth.message ?? antigravityAuthGuidance() };
+  }
+  const service = classifyAgentServiceFailure(detail);
+  if (service === 'RATE_LIMITED') {
+    return { code: 'RATE_LIMITED', message: antigravityQuotaGuidance() };
+  }
+  if (!service && options.cliPrintedNothing) {
+    return { code: 'AGENT_AUTH_REQUIRED', message: antigravityAuthGuidance() };
+  }
+  return null;
+}
+
 export function reasonixAuthGuidance(): string {
   return REASONIX_AUTH_GUIDANCE;
 }

@@ -175,8 +175,8 @@ describe('composer agent popover (AvatarMenu.tsx + styles/shell.css)', () => {
     expect(avatarMenuSource).toMatch(/closest\('\.composer-shell'\)/);
     expect(avatarMenuSource).toMatch(/new ResizeObserver\(updatePosition\)/);
     expect(avatarMenuSource).toMatch(/resizeObserver\?\.disconnect\(\)/);
-    expect(avatarMenuSource).toMatch(/Math\.min\(208, Math\.max\(0, maxRight - minLeft\)\)/);
-    expect(avatarMenuSource).not.toMatch(/Math\.min\(208, window\.innerWidth - margin \* 2\)/);
+    expect(avatarMenuSource).toMatch(/Math\.min\(260, Math\.max\(0, maxRight - minLeft\)\)/);
+    expect(avatarMenuSource).not.toMatch(/Math\.min\(260, window\.innerWidth - margin \* 2\)/);
   });
 
   it('is a flat elevated surface: solid --bg, no glass backdrop', () => {

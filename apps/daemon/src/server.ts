@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { resolveRoutineExecution } from './automations/runtime-selection.js';
 import { startEvidenceDelivery } from './services/evidence-delivery.js';
 import type {
   DesktopExportArtifactInput,
@@ -248,7 +249,6 @@ import {
   detectAgents,
   getAgentDef,
   isKnownModel,
-  isKnownReasoningEffort,
   isKnownServiceTier,
   openDesignAmrRunAttempt,
   openDesignAmrTraceEnv,
@@ -263,8 +263,9 @@ import {
   preferFreshLiveModels,
   rememberLiveModels,
   resolveDefaultModelFromOptions,
-  resolveModelForAgent,
   resolveModelForServiceTier,
+  resolveRequestedRunModel,
+  resolveRunReasoningEffort,
 } from './runtimes/models.js';
 import { loadMmdRouteLaunchEnv } from './runtimes/mmd-routes.js';
 import { withAcpHandshakeFailureGuidance } from './runtimes/acp-handshake-failure.js';
@@ -512,6 +513,8 @@ import {
   getDetectedRuntimeVersions,
   ensureDetectedRuntimeCapabilities,
 } from './runtimes/detection.js';
+import { confirmReasoningCapability } from './runtimes/reasoning-capability.js';
+import { resolveRuntimeStreamTransport } from './runtimes/stream-transport.js';
 import { resolveBundledOdNextRuntimeCapability } from './runtimes/od-next-capability-gate.js';
 import {
   createOdNextNativeBuildPackageBindings,
@@ -527,6 +530,7 @@ import {
   antigravityQuotaGuidance,
   classifyAgentAuthFailure,
   classifyAgentServiceFailure,
+  classifyAntigravitySilentExit,
   cursorAuthGuidance,
   normalizeDeepSeekHarnessFailure,
 } from './runtimes/auth.js';
@@ -941,6 +945,7 @@ import { registerStrategyRolloutRoutes } from './routes/strategy-rollout.js';
 import { registerTerminalRoutes } from './routes/terminal.js';
 import { registerBrowserSessionRoutes } from './routes/browser-sessions.js';
 import { createTerminalService } from './terminals.js';
+import { createCodexImageService } from './media/codex-image-service.js';
 import { createBrowserSessionService } from './browser-sessions.js';
 import { registerSocialShareRoutes } from './routes/social-share.js';
 import { registerOpenDesignPublicMetadataRoutes } from './routes/open-design-public-metadata.js';
@@ -1229,6 +1234,7 @@ import {
   renderPluginSharePrompt,
 } from './plugins/share-helpers.js';
 import { sanitizeArchiveFilename } from './projects/archive-filename.js';
+import { resolveRunExecutionDefaults } from './projects/execution.js';
 import {
   isLoopbackHostname,
   isLoopbackPeerAddress,
@@ -8010,8 +8016,9 @@ export async function startServer({
     taskObservationRollout.diagnostic(),
   );
 
-  // Interactive Terminal sessions (node-pty). In-memory, process-local, and
-  // killed on daemon shutdown — see shutdownDaemonRuns below.
+  // Process-local services own their children until completion or explicit
+  // daemon shutdown — see shutdownDaemonRuns below.
+  const codexImageService = createCodexImageService();
   const terminalService = createTerminalService();
   const browserSessionService = createBrowserSessionService();
 
@@ -8529,7 +8536,7 @@ export async function startServer({
     AUDIO_DURATIONS_SEC,
     readMaskedConfig,
     writeConfig,
-    generateMedia: (args) => generateMedia({ ...args, desktopFrameRenderer }),
+    generateMedia: (args) => generateMedia({ ...args, desktopFrameRenderer, codexImageRenderer: codexImageService.render }),
     mediaTasks: mediaTaskStore.mediaTasks,
     createMediaTask: mediaTaskStore.createMediaTask,
     persistMediaTask: mediaTaskStore.persistMediaTask,
@@ -11057,14 +11064,31 @@ export async function startServer({
     // Single choke point for the codex transport switch. Every other
     // agent — and codex with the switch off — gets back the identical
     // registry object, so nothing below can tell this call happened.
-    const def = applyCodexTransportOverride(getAgentDef(agentId));
-    if (!def)
+    const selectedDef = applyCodexTransportOverride(getAgentDef(agentId));
+    if (!selectedDef)
       return failRun(
         'AGENT_UNAVAILABLE',
         `unknown agent: ${agentId}`,
       );
-    if (!def.bin)
+    if (!selectedDef.bin)
       return failRun('AGENT_UNAVAILABLE', 'agent has no binary');
+    // The per-agent CLI env (binary overrides, auth env) is read here, before
+    // the transport decision below, so the `--help` probe reads the same
+    // executable the spawn will launch.
+    let configuredAgentEnv = {};
+    let appConfigForRun = null;
+    try {
+      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
+      appConfigForRun = appConfig;
+      configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, selectedDef.id);
+    } catch {
+      configuredAgentEnv = {};
+    }
+    // Freeze this attempt's transport before anything reads `def.streamFormat`:
+    // the composed prompt (API-mode override, execution profile), the stream
+    // parser, stdout artifact extraction, and the argv all follow this one
+    // decision. Defs without a `structuredStreamUpgrade` come back unchanged.
+    const def = await resolveRuntimeStreamTransport(selectedDef, configuredAgentEnv);
     const byokOpenCodeProvider = def.id === 'byok-opencode'
       ? buildOpenCodeByokProviderConfig(
           byokProvider,
@@ -11914,15 +11938,8 @@ export async function startServer({
     // kept as a real identity because ACP runtimes can leave model selection to
     // the upstream session's own configured default; omitted models may still
     // resolve to an available fallback below.
-    let configuredAgentEnv = {};
-    let appConfigForRun = null;
-    try {
-      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
-      appConfigForRun = appConfig;
-      configuredAgentEnv = agentCliEnvForAgent(appConfig.agentCliEnv, def.id);
-    } catch {
-      configuredAgentEnv = {};
-    }
+    // `configuredAgentEnv` / `appConfigForRun` were read right after the def
+    // was selected (the transport decision needs the configured binary).
     const requestedLiveModelScope = def.id === 'amr'
       ? resolveAmrProfile({
           ...process.env,
@@ -11930,17 +11947,19 @@ export async function startServer({
           ...configuredAgentEnv,
         })
       : null;
-    const configuredModel =
-      typeof appConfigForRun?.agentModels?.[def.id]?.model === 'string'
-        ? appConfigForRun.agentModels[def.id].model
-        : null;
-    let safeModel = resolveModelForAgent(
+    // A project stamped for this agent owns the fallback: its model, or the
+    // CLI default when the stamp names none — never the global agentModels.
+    // Unstamped projects (and runs sent to a different agent) keep reading the
+    // saved app-config model.
+    const configuredModel = resolveRunExecutionDefaults(
+      def.id,
+      projectRecord,
+      appConfigForRun,
+    ).model;
+    let safeModel = resolveRequestedRunModel(
       def,
-      typeof requestedRuntimeModel === 'string'
-        ? isKnownModel(def, requestedRuntimeModel, requestedLiveModelScope)
-          ? requestedRuntimeModel
-          : sanitizeCustomModel(requestedRuntimeModel)
-        : configuredModel,
+      requestedRuntimeModel,
+      configuredModel,
       process.env,
       requestedLiveModelScope,
     );
@@ -11949,11 +11968,12 @@ export async function startServer({
       typeof process.env[def.defaultModelEnvVar] === 'string' &&
       process.env[def.defaultModelEnvVar]?.trim(),
     );
-    const safeReasoning =
-      typeof reasoning === 'string' &&
-      isKnownReasoningEffort(def, safeModel, reasoning, requestedLiveModelScope)
-        ? reasoning
-        : null;
+    let safeReasoning = resolveRunReasoningEffort(
+      def,
+      safeModel,
+      reasoning,
+      requestedLiveModelScope,
+    );
     safeModel = resolveModelForServiceTier(
       def,
       safeModel,
@@ -13731,6 +13751,21 @@ export async function startServer({
       // to be filled only by `GET /api/agents`. Probe it here so a daemon that
       // has never served that route still builds the same argv as one that has.
       await ensureDetectedRuntimeCapabilities(def.id, configuredAgentEnv);
+      // A validated effort still needs the installed CLI to confirm the flag
+      // that carries it. When it does not (or cannot answer even after one
+      // re-probe), drop the effort and say so instead of handing an older
+      // build an option it would abort on.
+      const reasoningOmission = await confirmReasoningCapability(
+        def,
+        agentOptions.reasoning,
+        configuredAgentEnv,
+      );
+      if (reasoningOmission) {
+        agentOptions.reasoning = null;
+        safeReasoning = null;
+        console.warn(`[run ${run.id}] ${reasoningOmission.message}`);
+        design.runs.emit(run, 'diagnostic', reasoningOmission);
+      }
       args = def.buildArgs(
         composed,
         promptImagePaths,
@@ -13926,6 +13961,17 @@ export async function startServer({
     // they just terminated the process. Set strictly inside
     // `failForInactivity`'s quiet-period branch.
     let artifactQuietShutdownRequested = false;
+    // Set the moment the inactivity watchdog decides to stop this attempt
+    // (the stall verdict or the artifact quiet-period shutdown), before the
+    // child is signalled. A CLI that reports its own termination as an error
+    // frame — agy prints `result.status: "ERROR"`, `error: "interrupted"` on
+    // SIGTERM — is describing our teardown, not a failure of its own, so
+    // `sendAgentEvent` drops agent error frames once this is true. Without
+    // that, the stall path persists a second "interrupted" error after the
+    // stall error, and the quiet-period path latches `agentStreamError` and
+    // turns a delivered run into `failed`. Same rule the cancel path already
+    // applies via `run.cancelRequested`.
+    let watchdogTeardownStarted = false;
     // Set when the no-output inactivity watchdog routed this attempt through
     // the same-run retry finalizer AND that finalizer restarted the run on a
     // fresh child. The stalled child is then SIGTERM'd, so its later `close`
@@ -14017,6 +14063,7 @@ export async function startServer({
     };
     const failForInactivity = (reason: 'inactivity' | 'first_output' = 'inactivity') => {
       if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
+      watchdogTeardownStarted = true;
       clearInactivityWatchdog();
       clearFirstOutputWatchdog();
       if (artifactRegistered) {
@@ -15317,7 +15364,10 @@ export async function startServer({
         // Cancellation is the terminal user intent. Some CLIs flush a final
         // error record while reacting to SIGTERM; treating that late frame as
         // a run failure races the cancel route and can make it return failed.
-        if (run.cancelRequested) return;
+        // The watchdog's own teardown is the same situation: the verdict
+        // (stall error, or quiet-period success) was decided before the
+        // signal, and the CLI's "interrupted" frame only echoes it.
+        if (run.cancelRequested || watchdogTeardownStarted) return;
         if (agentStreamError) return;
         flushVisibleAgentStderr();
         const failureText = [
@@ -16379,6 +16429,31 @@ export async function startServer({
         !agentProducedOutput
       ) {
         markRpcCloseReason('empty_output');
+        // Antigravity on its structured stream (#4281): sign-in and quota
+        // failures are still reported only in agy's `--log-file`, so read it
+        // here too rather than only on the plain-stdout path below, which a
+        // structured run never reaches. The stdout tail is left out on
+        // purpose — it is protocol JSON that embeds tool output.
+        if (agentLogFilePath) {
+          let logTail = '';
+          try {
+            logTail = (await fs.promises.readFile(agentLogFilePath, 'utf8')).slice(-8192);
+          } catch {
+            // No log written: classify from stderr alone.
+          }
+          const silentExit = classifyAntigravitySilentExit(
+            `${agentStderrTail}\n${logTail}`,
+            { cliPrintedNothing: !childStdoutSeen },
+          );
+          if (silentExit) {
+            send('error', createSseErrorPayload(
+              silentExit.code,
+              silentExit.message,
+              { retryable: true },
+            ));
+            return finishWithRetryDecision('failed', code, signal);
+          }
+        }
         send('error', createSseErrorPayload(
           'AGENT_EXECUTION_FAILED',
           'Agent completed without producing any output. The model or provider may have returned an empty response. Check the agent logs for upstream errors, then try re-authenticating the agent or switching models.',
@@ -17570,15 +17645,7 @@ export async function startServer({
   // and dispatches into the same chat runner used by manual runs.
   routineService.setRunHandler(async ({ routine, trigger, startedAt, runId }) => {
     const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
-    let agentId = routine.agentId
-      || (typeof appConfig.agentId === 'string' && appConfig.agentId ? appConfig.agentId : null);
-    if (!agentId) {
-      const agents = await detectAgents(appConfig.agentCliEnv ?? {}).catch(() => []);
-      agentId = agents.find((agent) => agent.available)?.id ?? null;
-    }
-    if (!agentId) {
-      throw new Error('No available agent is configured. Choose an agent in Settings first.');
-    }
+    const { agentId, ...modelPrefs } = await resolveRoutineExecution(routine, appConfig, detectAgents);
 
     const now = startedAt;
     const storedRoutineWorkspaceScope =
@@ -17831,7 +17898,6 @@ export async function startServer({
       });
     };
 
-    const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
     const start = () => {
       // Notify any open `ProjectView` only after the routine run row has
       // been accepted and preparation has completed, so failed setup does not
@@ -18114,7 +18180,10 @@ export async function startServer({
       amrTerminalReportDelivery.stop();
       clearTerminalTelemetryFallbackTimers();
       const shutdownGraceMs = resolveChatRunShutdownGraceMs();
-      await design.runs.shutdownActive({ graceMs: shutdownGraceMs });
+      await Promise.all([
+        design.runs.shutdownActive({ graceMs: shutdownGraceMs }),
+        codexImageService.shutdownActive(),
+      ]);
       // Cleanup runs independently of user terminal classification. Give
       // confirmed closed writers at most three additional seconds at shutdown.
       const cleanupDrain = await codexThreadCleanupOwner.drain(shutdownGraceMs);

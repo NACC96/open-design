@@ -2759,6 +2759,7 @@ export interface Dict {
   'avatar.amrConsoleMeta': string;
   'avatar.settings': string;
   'avatar.backToProjects': string;
+  'avatar.executionSaveFailed': string;
   'avatar.metaActive': string;
   'avatar.metaOffline': string;
   'avatar.metaSelected': string;
@@ -3087,6 +3088,12 @@ export interface Dict {
    * 名词「新会话」+ 动词「开始」那一族。
    */
   'chat.forkConversationFailed': string;
+  'chat.forkProject': string;
+  'chat.forkProjectBusy': string;
+  'chat.forkProjectFailed': string;
+  'chat.forkProjectAttachmentUnavailable': string;
+  'chat.forkProjectMessageUnavailable': string;
+  'chat.forkProjectPluginUnavailable': string;
   'chat.startTitle': string;
   'chat.startHint': string;
   'chat.brandBrowserAssistDesktopOnly': string;

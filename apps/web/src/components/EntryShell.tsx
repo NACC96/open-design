@@ -99,15 +99,6 @@ import {
   buildProjectSearchCatalog,
   ProjectSearchModal,
 } from './ProjectSearchModal';
-import {
-  CloudSignInTip,
-  RailAccountRecoveryTip,
-  RailAccountSyncTip,
-} from './CloudSignInTip';
-import {
-  resolveEntryRailAccountFooterState,
-  requiresAmrReauthentication,
-} from './entry-rail-account-state';
 import { LibrarySection } from './LibrarySection';
 import { UpdaterPopup } from './UpdaterPopup';
 import { WhatsNewPopup } from './WhatsNewPopup';
@@ -147,7 +138,6 @@ import {
 } from './agentModelSelection';
 import { AgentIcon } from './AgentIcon';
 import { CommunityView } from './CommunityView';
-import { TeamSlotPlaceholder } from './TeamSlotPlaceholder';
 import {
   notifyTeamProjectsChanged,
   notifyWorkspaceBillingRefresh,
@@ -161,12 +151,6 @@ import {
   workspaceBillingSummaryForContext,
 } from '../collab/useWorkspaceContext';
 import { useWorkspaceInvalidation } from '../collab/workspace-events';
-import { resolvePlanLabelTier } from '../collab/team-plan';
-import { resolveDeepSeekV4FlashCampaignAudience } from '../campaigns/deepseek-v4-flash';
-import { useDeepSeekV4FlashCampaignVisibility } from '../campaigns/use-deepseek-v4-flash-campaign';
-import { WorkbenchCampaignBadge } from './WorkbenchCampaignBadge';
-import { canRenderProductionCampaignBadge, ProductionCampaignBadge } from './ProductionCampaignBadge';
-import { ProductionCampaignHover } from './ProductionCampaignHover';
 import {
   beginWorkspaceScopedRead,
   workspaceIdentityCacheKey,
@@ -198,7 +182,6 @@ import type { PluginLoopSubmit } from './PluginLoopHome';
 import {
   duplicatePluginAsProject,
   patchProject,
-  ProjectCreateError,
   resolvedWorkspaceContextForWrite,
   type PluginShareAction,
   type PluginShareProjectOutcome,
@@ -698,39 +681,11 @@ export function EntryShell({
   // unresolved or unavailable authority into an anonymous, unbound create.
   const workspaceContextState = useWorkspaceContext();
   const { context: workspaceContext, loading: workspaceLoading } = workspaceContextState;
-  const accountFooterState = resolveEntryRailAccountFooterState(
-    workspaceContextState,
-    amrLoggedIn,
-    amrSessionState,
-  );
-  const railWorkspaceContext = accountFooterState === 'sign-in'
-    ? null
-    : workspaceContext;
-  const usesOpenDesignCloud = config.mode === 'daemon' && config.agentId === 'amr';
-  const amrProfile = config.agentCliEnv?.amr?.OPEN_DESIGN_AMR_PROFILE ?? null;
-  const amrAuthRequired =
-    workspaceContextState.failure === 'reauth-required'
-    || (
-      usesOpenDesignCloud
-      && requiresAmrReauthentication(amrSessionState, workspaceContextState.failure)
-    );
-  useEffect(() => {
-    // The entry shell is an authenticated surface. Both an explicit signed-out
-    // status and a definitive credential rejection return to the existing
-    // Cloud identity gate. Passive reauthentication preserves the saved model
-    // source and Home's locally persisted, not-yet-sent draft.
-    const selectedCloudIdentityRejected = usesOpenDesignCloud && amrLoggedIn === false;
-    if ((!selectedCloudIdentityRejected && !amrAuthRequired) || view === 'onboarding') return;
-    navigate({ kind: 'home', view: 'onboarding' }, { replace: true });
-  }, [amrAuthRequired, amrLoggedIn, usesOpenDesignCloud, view]);
-  let accountFooterNotice: ReactNode = null;
-  if (accountFooterState === 'syncing') {
-    accountFooterNotice = <RailAccountSyncTip />;
-  } else if (accountFooterState === 'recovering') {
-    accountFooterNotice = <RailAccountRecoveryTip />;
-  } else if (accountFooterState === 'sign-in') {
-    accountFooterNotice = <CloudSignInTip />;
-  }
+  // Fork (Local AI only): the rail never presents an Open Design Cloud
+  // account — no sign-in callout, no account, plan or billing chrome — even
+  // when a lingering Cloud session still resolves a personal workspace so its
+  // projects stay visible. There is no Cloud identity gate to send users to.
+  const railWorkspaceContext = null;
   const workspaceContextRef = useRef(workspaceContext);
   workspaceContextRef.current = workspaceContext;
   const workspaceContextStateRef = useRef(workspaceContextState);
@@ -745,36 +700,6 @@ export function EntryShell({
     workspaceBillingResponse,
     workspaceContext,
   );
-  const [goPlanSunsetMessagePending, setGoPlanSunsetMessagePending] = useState(false);
-  const deepSeekCampaignVisibility = useDeepSeekV4FlashCampaignVisibility();
-  // Same personal-vs-team accountPlan rule as App's `resolvedAmrPlan`.
-  const deepSeekCampaignPlan = resolvePlanLabelTier({
-    billing: workspaceBilling,
-    context: workspaceContext,
-    accountPlan:
-      workspaceLoading || workspaceContext?.workspaceType === 'team'
-        ? null
-        : amrAccountPlan?.trim() || null,
-  });
-  const resolvedDeepSeekV4FlashCampaignAudience = resolveDeepSeekV4FlashCampaignAudience({
-    // Subscription is the only campaign segmentation axis. In particular,
-    // `resolvePlanLabelTier` turns the backend-confirmed unsubscribed state into
-    // `free`; wallet balance / historical recharge never upgrades this audience.
-    plan: deepSeekCampaignPlan,
-    loggedIn: amrLoggedIn,
-    now: deepSeekCampaignVisibility.now,
-  });
-  const deepSeekV4FlashCampaignAudience = goPlanSunsetMessagePending
-    ? 'unknown'
-    : resolvedDeepSeekV4FlashCampaignAudience;
-  const topRightCampaignAudience =
-    deepSeekV4FlashCampaignAudience === 'unknown'
-      ? null
-      : deepSeekV4FlashCampaignAudience;
-  // The CMS touchpoints this rail hosts are home placements (`opend.home.*`).
-  // The rail itself rides every entry view, so the home view — not the rail —
-  // is what decides whether they may be on screen.
-  const homeCampaignHostsVisible = view === 'home';
   const workspaceBalanceUsd = workspaceBillingBalanceUsd(
     workspaceBillingResponse,
     workspaceContext,
@@ -782,7 +707,10 @@ export function EntryShell({
   // Team-wide shared-project discovery for the "全部项目" view. The member's own
   // `projects` prop is only their LOCAL list; team-shared projects come from the
   // resource hub through the daemon. Empty off-team / when the hub is unconfigured.
-  const teamProjects = useTeamProjects();
+  const teamProjects = useMemo<ReturnType<typeof useTeamProjects>>(
+    () => ({ projects: [], loading: false, reload: () => undefined }),
+    [],
+  );
   const hasWorkspaceContext = Boolean(workspaceContext);
   // The "全部项目" grid is the SAME project-card grid used everywhere; its
   // membership rule lives in `buildAllProjectsList`. Rows flow through
@@ -1147,12 +1075,13 @@ export function EntryShell({
     view === 'members' ||
     view === 'board' ||
     view === 'workspace-settings';
+  // Fork (Local AI only): there are no team workspaces, so these destinations
+  // always fall back to Home, whatever workspace context is resolved.
   useEffect(() => {
-    if (workspaceLoading) return;
-    if (isWorkspaceOnlyView && !hasWorkspaceContext) {
+    if (isWorkspaceOnlyView) {
       navigate({ kind: 'home', view: 'home' }, { replace: true });
     }
-  }, [workspaceLoading, isWorkspaceOnlyView, hasWorkspaceContext]);
+  }, [isWorkspaceOnlyView]);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   // Home has NO low-balance surface, and since T66 (product 2026-09-07) neither
   // does anywhere else: a positive balance produces nothing at all and the run
@@ -1261,19 +1190,6 @@ export function EntryShell({
     scrollContainer.scrollTop = 0;
   }, [view]);
   const analytics = useAnalytics();
-  // 产品拍板 D5: the campaign modal's paid 立即使用 performs the REAL switch —
-  // daemon execution mode + Cloud agent (amr) + DeepSeek V4 Flash — through
-  // the same persistence callbacks the InlineModelSwitcher writes through.
-  // Mode must flip first: a paid user still on BYOK (`mode === 'api'`) would
-  // otherwise keep the BYOK provider even after agent/model ids change.
-  const applyDeepSeekCampaignModel = useCallback(
-    (agentId: string, modelId: string) => {
-      onModeChange('daemon');
-      onAgentChange(agentId);
-      onAgentModelChange(agentId, { model: modelId });
-    },
-    [onAgentChange, onAgentModelChange, onModeChange],
-  );
   function changeView(next: EntryViewKind) {
     const navElement = navElementForView(next);
     if (navElement) {
@@ -1427,10 +1343,6 @@ export function EntryShell({
   // projectKind='other', so the agent infers the task type and asks only
   // when the brief cannot be routed reliably.
   async function handlePluginLoopSubmit(payload: PluginLoopSubmit) {
-    if (amrAuthRequired) {
-      navigate({ kind: 'home', view: 'onboarding' }, { replace: true });
-      return 'blocked' as const;
-    }
     const createInput = pluginLoopCreateInput(payload);
     const isAmrSend = config.mode === 'daemon' && config.agentId === 'amr';
     const amrModelId = isAmrSend
@@ -1551,18 +1463,7 @@ export function EntryShell({
       optimisticProjectId: handoff.projectId,
       ...(amrGatePrecheckWitness ? { amrGatePrecheckWitness } : {}),
     }));
-    try {
-      return await create();
-    } catch (error) {
-      if (
-        error instanceof ProjectCreateError
-        && error.code === 'AMR_AUTH_REQUIRED'
-      ) {
-        navigate({ kind: 'home', view: 'onboarding' }, { replace: true });
-        return 'blocked' as const;
-      }
-      throw error;
-    }
+    return await create();
   }
 
   /**
@@ -1652,32 +1553,6 @@ export function EntryShell({
     };
   }
 
-  /**
-   * Re-read every workspace surface because onboarding just ended.
-   *
-   * Onboarding is where a signed-out user signs IN, so the workspace context
-   * the shell resolved before it is stale by definition. Without this the rail
-   * came back in its signed-out shape — no workspace switcher, no 草稿 / 全部项目
-   * / Workspace 设置, and the "sign in to OpenDesign Cloud" callout still in
-   * the bottom-left corner (#140) — until a focus or the 30s poll happened to
-   * re-read it. `CloudSignInTip` fires the same three after its own sign-in.
-   *
-   * EVERY exit from onboarding must call this. It used to live inline in
-   * `finishOnboarding` only, so the "go build a design system" door left the
-   * shell on the stale signed-out context.
-   */
-  function refreshWorkspaceSurfacesAfterOnboarding() {
-    notifyWorkspaceContextRefresh();
-    notifyWorkspaceBillingRefresh();
-    notifyTeamProjectsChanged();
-  }
-
-  function finishOnboarding() {
-    onCompleteOnboarding();
-    refreshWorkspaceSurfacesAfterOnboarding();
-    changeView('home');
-  }
-
   // #5517: the GitHub/Discord/X/mail badges and the settings chip leave the
   // rail footer. Socials live in the account menu, while settings stays
   // reachable through either the account menu or the signed-out rail item.
@@ -1704,31 +1579,8 @@ export function EntryShell({
   // carries a redundant one.
 
 
-  if (view === 'onboarding') {
-    return (
-      <div className="entry-shell entry-shell--no-header entry-shell--onboarding">
-        <main className="entry-onboarding-modal" aria-label={t('settings.welcomeTitle')}>
-          <OnboardingView
-            config={config}
-            agents={agents}
-            agentsLoading={agentsLoading}
-            providerModelsCache={activeProviderModelsCache}
-            onProviderModelsCacheChange={activeSetProviderModelsCache}
-            daemonLive={daemonLive}
-            onModeChange={onModeChange}
-            onAgentChange={onAgentChange}
-            onAgentModelChange={onAgentModelChange}
-            onApiProtocolChange={onApiProtocolChange}
-            onApiModelChange={onApiModelChange}
-            onConfigPersist={onConfigPersist}
-            onRefreshAgents={onRefreshAgents}
-            onAmrLoginStatusChange={onAmrLoginStatusChange}
-            onFinish={finishOnboarding}
-          />
-        </main>
-      </div>
-    );
-  }
+  // Fork (Local AI only): first-run onboarding is not rendered. `/onboarding`
+  // parses to Home (see router.ts), so `view` never names it here.
 
   const homeExecutionSwitcher = (
     <InlineModelSwitcher
@@ -1773,11 +1625,6 @@ export function EntryShell({
     skillsLoading,
     connectors,
     promptTemplates,
-    artifactUpgradeSlot,
-    deepSeekV4FlashCampaignAudience,
-    onDeepSeekV4FlashCampaignUseNow: applyDeepSeekCampaignModel,
-    deepSeekV4FlashCampaignMetricsConsent: config.telemetry?.metrics === true,
-    deepSeekV4FlashCampaignInstallationId: config.installationId ?? null,
   };
 
   return (
@@ -1801,43 +1648,12 @@ export function EntryShell({
           }}
           onOpenSearch={() => setProjectSearchOpen(true)}
           open={railOpen}
-          topRightSlot={topRightCampaignAudience || (homeCampaignHostsVisible && amrLoggedIn === true) ? (
-            <>
-              {topRightCampaignAudience ? (
-                <WorkbenchCampaignBadge
-                  audience={topRightCampaignAudience}
-                  page="home"
-                  metricsConsent={config.telemetry?.metrics === true}
-                  installationId={config.installationId}
-                  loggedIn={amrLoggedIn}
-                />
-              ) : null}
-              {homeCampaignHostsVisible
-                && canRenderProductionCampaignBadge(amrLoggedIn === true, amrAccountId) ? <ProductionCampaignBadge authenticated sessionSubject={amrAccountId} /> : null}
-              {/* The requirements-specific hover entry is its own authorized
-                  touchpoint, beside—not renamed from—the account badge. */}
-              {homeCampaignHostsVisible ? (
-                <ProductionCampaignHover
-                  authenticated={amrLoggedIn === true}
-                  sessionSubject={amrAccountId}
-                />
-              ) : null}
-            </>
-          ) : null}
           context={railWorkspaceContext}
           billing={workspaceBilling}
           billingResponse={workspaceBillingResponse}
           balanceUsd={workspaceBalanceUsd}
           onOpenSettings={onOpenSettings}
-          onInvite={() => changeView('members')}
-          onSignInCloud={() => navigate({ kind: 'home', view: 'onboarding' })}
-          onSignedOut={onSignedOut}
           updaterSlot={updaterSlot}
-          // A loading or unavailable workspace read is not proof of sign-out.
-          // Keep the account slot neutral until Cloud answers successfully;
-          // only a successful null context (or known local sign-out) may show
-          // the sign-in card.
-          footerNotice={accountFooterNotice}
           /* Same catalog and same opener the 全部项目 grid uses below, so the
              rail's 最近浏览过 list and that view's 最近浏览过 tab are two views of
              ONE list rather than two sorts of two lists. */
@@ -1854,11 +1670,6 @@ export function EntryShell({
           recentProjectOwnerMemberIds={teamProjectOwnerMemberIds}
           onRecentProjectShared={markProjectShared}
           onRecentProjectShareFailed={markProjectShareFailed}
-          priorityAnnouncementActive={view === 'home' && goPlanSunsetMessagePending}
-          onPriorityAnnouncementPendingChange={setGoPlanSunsetMessagePending}
-          priorityAnnouncementCurrentPlanId={deepSeekCampaignPlan}
-          priorityAnnouncementAmrProfile={amrProfile}
-          priorityAnnouncementMetricsConsent={config.telemetry?.metrics === true}
         />
         {projectSearchOpen ? (
           <ProjectSearchModal
@@ -1875,7 +1686,7 @@ export function EntryShell({
               the workspace tabs bar (entryRailBridge), the updater popup host
               lives in the rail footer, and everything below is fixed-position
               or portalled so it occupies no layout space here. */}
-          <WhatsNewPopup active={view === 'home' && !goPlanSunsetMessagePending} />
+          <WhatsNewPopup active={view === 'home'} />
           {/* The campaign badge lives in EntryNavRail's top-right cluster so it
               stays beside the account module across every entry tab. */}
           <div
@@ -2100,7 +1911,7 @@ export function EntryShell({
               ) : projectSearchProjects.length === 0 ? (
                 <EntryBlankState
                   heading={t('entry.navDrafts')}
-                  description={t('entry.blankDraftsDescription')}
+                  description={t('entry.draftsDescription')}
                   actionLabel={t('entry.blankCreate')}
                   onCreate={() => startBlankProjectFromRail()}
                 />
@@ -2132,15 +1943,6 @@ export function EntryShell({
                   />
                 </div>
               )
-            ) : null}
-            {view === 'members' ? (
-              <TeamSlotPlaceholder icon="users" title={t('entry.navMembers')} />
-            ) : null}
-            {view === 'board' ? (
-              <TeamSlotPlaceholder icon="kanban" title={t('entry.navBoard')} />
-            ) : null}
-            {view === 'workspace-settings' ? (
-              <TeamSlotPlaceholder icon="settings" title={t('entry.navWorkspaceSettings')} />
             ) : null}
           </div>
         </main>

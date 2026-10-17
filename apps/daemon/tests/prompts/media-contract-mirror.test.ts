@@ -66,6 +66,7 @@ describe('MEDIA_USER_REPLY_CONTRACT mirrors', () => {
     expect(normalized).toContain('trying again shortly usually works.');
     expect(daemonBody).toContain('error.subject');
     expect(daemonBody).toContain('error.nextStep');
+    expect(daemonBody).toContain('never switch to an API-key or Cloud route');
     expect(daemonBody).not.toContain('错误代码');
     expect(daemonBody).not.toContain('MEDIA_DISPATCH_FAILED');
     expect(daemonBody).not.toContain('MEDIA_EXECUTION_DISABLED');
@@ -73,8 +74,9 @@ describe('MEDIA_USER_REPLY_CONTRACT mirrors', () => {
     expect(daemonBody).not.toContain('图片生成服务暂时不可用');
   });
 
-  it('routes an unspecified image model through the managed Cloud default', () => {
-    expect(generationBody).toContain('otherwise use \\`vela/gpt-image-2\\`');
+  it('routes an unspecified image model through the no-key Codex default', () => {
+    expect(generationBody).toContain('otherwise use \\`codex-gpt-image-2\\`');
+    expect(generationBody).not.toContain('otherwise use \\`vela/gpt-image-2\\`');
     expect(generationBody).not.toContain('otherwise use \\`gpt-image-2\\`');
   });
 });

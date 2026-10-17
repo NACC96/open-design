@@ -1,3 +1,4 @@
+import { enforceLocalAiOnlyConfig } from '../state/local-ai-only';
 // InlineModelSwitcher — top-bar chip exposing CLI/BYOK + model picker.
 //
 // Lives in the entry view's sticky top-bar so users can swap between a
@@ -19,7 +20,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type { AmrWalletSnapshot } from '@open-design/contracts';
-import { VisuallyHidden } from '@open-design/components';
+import { Select, VisuallyHidden } from '@open-design/components';
 import { useT } from '../i18n';
 import {
   agentIdToTracking,
@@ -67,9 +68,11 @@ import type { AgentInfo, ApiProtocol, AppConfig, ExecMode } from '../types';
 import { apiProtocolLabel } from '../utils/apiProtocol';
 import { isVisibleLocalCliAgent } from '../utils/visibleAgents';
 import { AgentIcon } from './AgentIcon';
+import { AgentTabs } from './AgentTabs';
 import { Icon } from './Icon';
 import { modelProviderIconSrc } from './modelProviderIcon';
 import { PlanBadge } from './PlanBadge';
+import styles from './InlineModelSwitcher.module.css';
 import {
   AMR_LOGIN_STATUS_EVENT,
   AMR_LOGIN_POLL_INTERVAL_MS,
@@ -83,9 +86,11 @@ import { orderAgentsWithOpenDesignFirst } from './agentOrdering';
 import { anchorSelectionInView } from './pickerSelectionAnchor';
 import {
   agentModelIsSelectable,
+  agentReasoningOptions,
   defaultAgentModelId,
   effectiveAgentModelChoice,
   normalizeAgentModelChoice,
+  reasoningPatchForModelChange,
 } from './agentModelSelection';
 import {
   modelVersionLabel,
@@ -175,8 +180,8 @@ function displayAgentChipName(agent: Pick<AgentInfo, 'id' | 'name'>): string {
 }
 
 export function InlineModelSwitcher({
-  config,
-  agents,
+  config: savedConfig,
+  agents: detectedAgents,
   providerModelsCache,
   compact = false,
   daemonLive,
@@ -188,6 +193,8 @@ export function InlineModelSwitcher({
   onProviderModelsCacheChange,
   onOpenSettings,
 }: Props) {
+  const config = useMemo(() => enforceLocalAiOnlyConfig(savedConfig), [savedConfig]);
+  const agents = useMemo(() => detectedAgents.filter(isVisibleLocalCliAgent), [detectedAgents]);
   const t = useT();
   const analytics = useAnalytics();
   // This flag is a reserved presentation branch with no trigger wired yet.
@@ -207,7 +214,10 @@ export function InlineModelSwitcher({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const compactModelListRef = useRef<HTMLDivElement | null>(null);
-  const compactSelectionAnchoredRef = useRef(false);
+  // Which agent's list was last anchored on its selected row this open
+  // (`undefined` = not yet). Keyed by agent so switching CLI tabs re-anchors
+  // the new agent's list instead of leaving it on the old scroll offset.
+  const compactSelectionAnchoredRef = useRef<string | null | undefined>(undefined);
   const campaignBenefitTrackedForOpenRef = useRef(false);
   // Viewport clamp for the popover (issue #99): the anchor chip can sit
   // anywhere on screen (home hero mid-page, chat composer at the bottom), so
@@ -714,6 +724,12 @@ export function InlineModelSwitcher({
       : configuredModelId ?? defaultAgentModelId(currentAgent);
   const currentModelOption =
     currentAgentModels.find((m) => m.id === currentModelId) ?? null;
+  const currentReasoningOptions = agentReasoningOptions(currentAgent, currentModelId);
+  const currentReasoningId = currentReasoningOptions?.some(
+    (option) => option.id === effectiveCurrentChoice.reasoning,
+  )
+    ? effectiveCurrentChoice.reasoning!
+    : currentReasoningOptions?.find((option) => option.default)?.id ?? currentReasoningOptions?.[0]?.id ?? '';
   // `agentId` and `agentModels` intentionally retain the last local-agent
   // choice while BYOK is active so switching back restores that choice. Do
   // not let campaign UI read that dormant AMR state: in BYOK mode the visible
@@ -761,6 +777,7 @@ export function InlineModelSwitcher({
    * the pick was refused, which is the signal a row should not close the panel
    * or report a selection that did not happen.
    */
+  const savedReasoning = currentChoice.reasoning;
   const applyAgentModel = useCallback(
     (modelId: string, extra?: { serviceTier?: string }) => {
       const agentId = currentAgent?.id;
@@ -768,10 +785,17 @@ export function InlineModelSwitcher({
       if (!agentModelIsSelectable(currentAgent, modelId)) {
         return false;
       }
-      onAgentModelChange?.(agentId, { model: modelId, ...extra });
+      // A saved effort the next model does not offer is cleared here, in the
+      // one sink both model lists share, so the stored choice cannot drift
+      // from the effort the select shows.
+      onAgentModelChange?.(agentId, {
+        model: modelId,
+        ...extra,
+        ...reasoningPatchForModelChange(currentAgent, modelId, savedReasoning),
+      });
       return true;
     },
-    [currentAgent, onAgentModelChange],
+    [currentAgent, onAgentModelChange, savedReasoning],
   );
 
   /**
@@ -797,13 +821,18 @@ export function InlineModelSwitcher({
   // who has started browsing it.
   useLayoutEffect(() => {
     if (!open) {
-      compactSelectionAnchoredRef.current = false;
+      compactSelectionAnchoredRef.current = undefined;
       return;
     }
-    if (compactSelectionAnchoredRef.current || !compactModelListRef.current) return;
-    compactSelectionAnchoredRef.current = true;
+    if (
+      compactSelectionAnchoredRef.current === currentAgentId ||
+      !compactModelListRef.current
+    ) {
+      return;
+    }
+    compactSelectionAnchoredRef.current = currentAgentId;
     anchorSelectionInView(compactModelListRef.current, '[aria-checked="true"]');
-  }, [compactModelRows, open]);
+  }, [compactModelRows, currentAgentId, open]);
 
   useEffect(() => {
     if (!open) {
@@ -1246,181 +1275,37 @@ export function InlineModelSwitcher({
           data-testid="inline-model-switcher-popover"
           style={popoverPlacement ? { maxHeight: `${popoverPlacement.maxHeight}px`, overflowY: 'auto' } : undefined}
         >
-          {compact ? null : (
-          <div className="inline-switcher__row">
-            <span className="inline-switcher__label">
-              {t('inlineSwitcher.modeLabel')}
-            </span>
-            <div className="inline-switcher__seg" role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={config.mode === 'daemon'}
-                className={
-                  'inline-switcher__seg-btn' +
-                  (config.mode === 'daemon' ? ' is-active' : '')
-                }
-                data-testid="inline-model-switcher-mode-daemon"
-                disabled={!daemonLive && config.mode !== 'daemon'}
-                onClick={() => {
-                  trackExecutionSettingsPopoverClick(analytics.track, {
-                    page_name: 'home',
-                    area: 'execution_settings_popover',
-                    element: 'mode_local_cli',
-                  });
-                  // Optional-call so a transient Fast Refresh state where a
-                  // parent has not yet re-rendered with the new prop signature
-                  // does not crash the entire entry view. The same defensive
-                  // pattern is applied to every callback below.
-                  onModeChange?.('daemon');
-                  if (!daemonLive) {
-                    setOpen(false);
-                    onOpenSettings?.('execution');
-                  }
-                }}
-                title={
-                  !daemonLive
-                    ? t('inlineSwitcher.daemonOffline')
-                    : t('inlineSwitcher.useCli')
-                }
-              >
-                {t('inlineSwitcher.chipCli')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={config.mode === 'api'}
-                className={
-                  'inline-switcher__seg-btn' +
-                  (config.mode === 'api' ? ' is-active' : '')
-                }
-                data-testid="inline-model-switcher-mode-api"
-                onClick={() => {
-                  trackExecutionSettingsPopoverClick(analytics.track, {
-                    page_name: 'home',
-                    area: 'execution_settings_popover',
-                    element: 'mode_byok',
-                  });
-                  onModeChange?.('api');
-                }}
-                title={t('inlineSwitcher.useByok')}
-              >
-                {t('inlineSwitcher.chipByok')}
-              </button>
-            </div>
-          </div>
-          )}
-
-          {/* The popover body always reflects the ACTIVE execution mode:
-              `compact` only chooses layout density, never which catalogue is
-              on offer. A BYOK chip therefore always opens onto the BYOK
-              provider's model list (regression: the compact home popover kept
-              listing the local CLI agent's cloud models while the chip showed
-              the BYOK model). */}
-          {config.mode === 'api' ? (
+          {/* Fork (Local AI only): no execution-mode tabs and no API-key
+              (BYOK) provider catalogue — the popover always lists the
+              current local CLI agent's models. */}
+          {compact ? (
+            // Compact home popover: a row of installed-CLI tabs, then the
+            // selected agent's model names. A tab click writes the global
+            // default (so the next new project starts from it) and keeps the
+            // popover open so a model can be picked for that agent; the new
+            // project is stamped with whatever is selected when it is created.
             <>
-              {compact ? null : (
-              <div className="inline-switcher__row">
-                <span className="inline-switcher__label">
-                  {t('inlineSwitcher.providerLabel')}
+            <div className="inline-switcher__row">
+              {installedAgents.length > 0 ? (
+                <AgentTabs
+                  agents={installedAgents}
+                  selectedId={currentAgent?.id ?? null}
+                  onSelect={(agentId) => void handleAgentButtonClick(agentId)}
+                  ariaLabel={t('inlineSwitcher.agentLabel')}
+                  testIdPrefix="inline-model-switcher-agent-tab"
+                />
+              ) : (
+                <span className="inline-switcher__hint">
+                  {t('inlineSwitcher.noAgentsDetected')}
                 </span>
-                <div className="inline-switcher__chips" role="tablist">
-                  {API_PROTOCOL_TABS.map((tab) => {
-                    const active = apiProtocol === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={active}
-                        className={
-                          'inline-switcher__chip-tab' +
-                          (active ? ' is-active' : '')
-                        }
-                        data-testid={`inline-model-switcher-provider-${tab.id}`}
-                        onClick={() => {
-                          // Unlike Settings (which skips unmapped protocols),
-                          // report the click even when the protocol has no v2
-                          // provider_id (e.g. aihubmix) — just omit the field.
-                          trackExecutionSettingsPopoverClick(analytics.track, {
-                            page_name: 'home',
-                            area: 'execution_settings_popover',
-                            element: 'byok_provider_tab',
-                            provider_id:
-                              byokProtocolToTracking(tab.id) ?? undefined,
-                          });
-                          onApiProtocolChange?.(tab.id);
-                        }}
-                      >
-                        {tab.title}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
               )}
-
-              <div className="inline-switcher__row">
-                <span className="inline-switcher__label">
-                  {t('inlineSwitcher.modelLabel')}
-                </span>
-                {apiModelOptions.length > 0 ? (
-                  <SearchableModelSelect
-                    className="inline-switcher__select"
-                    popoverClassName="inline-model-popover"
-                    data-testid="inline-model-switcher-api-model"
-                    searchInputTestId="inline-model-switcher-api-model-search"
-                    popoverTestId="inline-model-switcher-api-model-popover"
-                    searchPlaceholder={t('designs.searchPlaceholder')}
-                    getPopoverBoundary={getModelPopoverBoundary}
-                    aria-label={t('inlineSwitcher.modelLabel')}
-                    models={apiModelChoices}
-                    value={config.model}
-                    onChange={(nextValue) => {
-                      trackExecutionSettingsPopoverClick(analytics.track, {
-                        page_name: 'home',
-                        area: 'execution_settings_popover',
-                        element: 'model_dropdown',
-                        execution_mode: 'byok',
-                        provider_id:
-                          byokProtocolToTracking(apiProtocol) ?? undefined,
-                        model_id: modelIdForTracking(nextValue),
-                      });
-                      onApiModelChange?.(nextValue);
-                    }}
-                    additionalOptions={
-                      config.model && !apiModelIds.includes(config.model)
-                        ? [
-                            {
-                              value: config.model,
-                              label: `${config.model} ${t('inlineSwitcher.customSuffix')}`,
-                            },
-                          ]
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <span className="inline-switcher__hint">
-                    {t('inlineSwitcher.openSettingsForModel')}
-                  </span>
-                )}
-              </div>
-
-              {!config.apiKey ? (
-                <div className="inline-switcher__warn" role="status">
-                  {t('inlineSwitcher.missingApiKey')}
-                </div>
-              ) : null}
-            </>
-          ) : compact ? (
-            // Compact home popover: a plain list of the CURRENT agent's model
-            // names (no header, no agent icons) — switching agents lives in
-            // the execution settings entry below.
+            </div>
             <div className="inline-switcher__row">
               {currentAgent && compactModelRows.length > 0 ? (
                 <div
                   className="inline-switcher__agent-grid"
                   role="radiogroup"
+                  aria-label={t('inlineSwitcher.modelLabel')}
                   ref={compactModelListRef}
                 >
                   {compactModelRows.map(({ model: m, selectable }) => {
@@ -1507,6 +1392,7 @@ export function InlineModelSwitcher({
                 </span>
               )}
             </div>
+            </>
           ) : (
             <>
               <div className="inline-switcher__row">
@@ -1770,6 +1656,41 @@ export function InlineModelSwitcher({
               ) : null}
             </>
           )}
+
+          {/* Shown for every Local CLI agent whose selected model (or the agent
+              itself) publishes effort options — Claude, Codex, OpenCode, Pi,
+              … — with the same labels Settings and the avatar menu render. */}
+          {config.mode === 'daemon' && currentAgent && currentReasoningOptions && currentReasoningOptions.length > 0 ? (
+            <label className="inline-switcher__row">
+              <span className="inline-switcher__label">{t('settings.reasoningPicker')}</span>
+              <Select
+                className={styles.reasoningSelect}
+                data-testid="inline-model-switcher-reasoning"
+                value={currentReasoningId}
+                onChange={(event) => {
+                  const reasoning = event.target.value;
+                  onAgentModelChange(currentAgent.id, { reasoning });
+                  trackExecutionSettingsPopoverClick(analytics.track, {
+                    page_name: 'home',
+                    area: 'execution_settings_popover',
+                    element: 'reasoning_dropdown',
+                    execution_mode: 'local_cli',
+                    cli_provider_id: agentIdToTracking(currentAgent.id),
+                    ...(currentModelId
+                      ? { model_id: modelIdForTracking(currentModelId) }
+                      : {}),
+                    reasoning_effort: reasoning,
+                  });
+                }}
+              >
+                {currentReasoningOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          ) : null}
 
           <button
             type="button"

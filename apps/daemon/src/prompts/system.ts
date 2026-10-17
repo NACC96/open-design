@@ -462,9 +462,9 @@ const MEDIA_DISPATCH_HINT = `
 
 If the user asks you to generate an image, video, or audio file — regardless of which provider or model they mention (fal, Replicate, OpenAI, etc.) — use the daemon dispatcher via your **Bash tool**. Do NOT call provider REST APIs directly.
 
-OpenDesign Cloud models use the \`vela/*\` prefix. Never invoke the \`vela\`
-CLI directly for those models: the OD dispatcher owns trusted Workspace
-attribution, polling, downloads, and final project-file placement.
+Use \`codex-gpt-image-2\` for images when no model is selected. It uses the
+local Codex ChatGPT subscription. Never invoke Codex or provider CLIs directly:
+the OD dispatcher owns generation, polling, and final project-file placement.
 
 The daemon injects these env vars into your shell (**POSIX bash — not PowerShell**):
 
@@ -542,7 +542,7 @@ function renderMediaDispatchModelGuidance(defaults?: ByokMediaDefaults): string 
   const videoModel = defaults?.videoModel?.trim();
   const imagePart = imageModel
     ? `For image generation prefer your configured model: \`${imageModel}\`.`
-    : 'For the best fal image model use `--model flux-pro-ultra`.';
+    : 'For image generation use `--model codex-gpt-image-2` unless another model was selected.';
   const videoPart = videoModel
     ? `For video prefer your configured model: \`${videoModel}\`.`
     : 'For video use `--model veo-3-fal` or `--model wan-2.1-t2v`.';
@@ -554,7 +554,7 @@ function renderMediaDispatchHint(
   runtimeDefaults?: ByokMediaDefaults,
 ): string {
   const effectiveDefaults = runtimeDefaults ?? defaults;
-  const imageModel = effectiveDefaults?.imageModel?.trim() || 'flux-pro-ultra';
+  const imageModel = effectiveDefaults?.imageModel?.trim() || 'codex-gpt-image-2';
   const hint = MEDIA_DISPATCH_HINT
     .replace('IMAGE_MODEL_VALUE', shellDoubleQuote(imageModel))
     .replace(
@@ -571,10 +571,10 @@ function mediaDefaultsForRuntime(
   if (agentId !== 'amr') return defaults;
   return {
     ...defaults,
-    imageModel: defaults?.imageModel?.trim() || 'vela/gpt-image-2',
+    imageModel: defaults?.imageModel?.trim() || 'codex-gpt-image-2',
     videoModel:
       defaults?.videoModel?.trim()
-      || 'vela/doubao-seedance-2-0-260128',
+      || 'doubao-seedance-2-0-260128',
   };
 }
 
@@ -593,9 +593,9 @@ function renderRuntimeMediaDefaultsHint(
   if (lines.length === 0) return '';
   return `
 
-### OpenDesign Cloud media defaults
+### Media defaults
 
-This AMR run uses these managed media defaults when the user has not selected
+This run uses these media defaults when the user has not selected
 a different run-scoped model:
 ${lines.join('\n')}`;
 }
@@ -2061,7 +2061,7 @@ function renderMetadataBlock(
       metadata.kind === 'image' &&
       !metadata.imageModel?.trim() &&
       tpl.model === 'gpt-image-2'
-        ? 'vela/gpt-image-2'
+        ? 'codex-gpt-image-2'
         : tpl.model;
     if (suggestedModel) meta.push(`suggested model: ${suggestedModel}`);
     if (tpl.aspect) meta.push(`aspect: ${tpl.aspect}`);

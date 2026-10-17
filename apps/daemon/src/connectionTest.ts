@@ -41,6 +41,7 @@ import { createClaudeStreamHandler } from './runtimes/claude-stream.js';
 import { diagnoseClaudeCliFailure } from './claude-diagnostics.js';
 import { createCopilotStreamHandler } from './copilot-stream.js';
 import { createJsonEventStreamHandler } from './runtimes/json-event-stream.js';
+import { resolveRuntimeStreamTransport } from './runtimes/stream-transport.js';
 import { agentCliEnvForAgent, validateAgentCliEnv } from './app-config.js';
 import {
   antigravityAuthGuidance,
@@ -2329,8 +2330,8 @@ async function testAgentConnectionInternal(
     typeof input.model === 'string' && input.model.trim()
       ? input.model.trim()
       : 'default';
-  const def = getAgentDef(input.agentId);
-  if (!def) {
+  const registryDef = getAgentDef(input.agentId);
+  if (!registryDef) {
     return {
       ok: false,
       kind: 'agent_not_installed',
@@ -2345,7 +2346,7 @@ async function testAgentConnectionInternal(
     validateAgentCliEnv(input.agentCliEnv),
     input.agentId,
   );
-  const executableResolution = resolveAgentLaunch(def, configuredAgentEnv);
+  const executableResolution = resolveAgentLaunch(registryDef, configuredAgentEnv);
   const resolvedBin = executableResolution.selectedPath;
   if (!resolvedBin || !executableResolution.launchPath) {
     return {
@@ -2353,10 +2354,15 @@ async function testAgentConnectionInternal(
       kind: 'agent_not_installed',
       latencyMs: Date.now() - start,
       model,
-      agentName: def.name,
+      agentName: registryDef.name,
       diagnostics: { phase: 'binary_resolution' },
     };
   }
+  // Same transport decision as a chat run: probe the advertised flags of the
+  // binary this test will launch, then build the argv and pick the stream
+  // parser from that one per-test def, so the smoke test exercises the same
+  // argv + parser pair a chat run on this binary would use.
+  const def = await resolveRuntimeStreamTransport(registryDef, configuredAgentEnv);
 
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-'));
   // Antigravity's print mode is silent on stdout/stderr for both

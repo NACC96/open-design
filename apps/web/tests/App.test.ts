@@ -10,7 +10,6 @@ import {
   projectRouteSurfaceState,
   resolveDeepLinkedTeamSharedProject,
   resolveSettingsCloseConfig,
-  shouldRouteToFirstRunOnboarding,
   shouldSyncMediaProvidersOnSave,
 } from '../src/App';
 import type { AppConfig, Project } from '../src/types';
@@ -73,14 +72,7 @@ const baseConfig: AppConfig = {
   designSystemId: null,
 };
 
-describe('shouldRouteToFirstRunOnboarding', () => {
-  it('never hijacks an explicit project deep link while daemon config is hydrating', () => {
-    const unfinished = { ...baseConfig, onboardingCompleted: false };
 
-    expect(shouldRouteToFirstRunOnboarding(unfinished, '/projects/project-a')).toBe(false);
-    expect(shouldRouteToFirstRunOnboarding(unfinished, '/')).toBe(true);
-  });
-});
 
 describe('hydrateReadyTeamProject', () => {
   const project: Project = {
@@ -262,6 +254,20 @@ describe('mergeAgentModelChoice', () => {
       reasoning: 'default',
     });
     expect(Object.prototype.hasOwnProperty.call(merged, 'serviceTier')).toBe(false);
+  });
+
+  it('removes reasoning only when the update explicitly clears it', () => {
+    const previous = { model: 'claude-opus-4-8', reasoning: 'xhigh' };
+    expect(mergeAgentModelChoice(previous, { model: 'claude-opus-4-7' })).toEqual({
+      model: 'claude-opus-4-7',
+      reasoning: 'xhigh',
+    });
+    const cleared = mergeAgentModelChoice(previous, {
+      model: 'claude-opus-4-6',
+      reasoning: undefined,
+    });
+    expect(cleared).toEqual({ model: 'claude-opus-4-6' });
+    expect(Object.prototype.hasOwnProperty.call(cleared, 'reasoning')).toBe(false);
   });
 });
 

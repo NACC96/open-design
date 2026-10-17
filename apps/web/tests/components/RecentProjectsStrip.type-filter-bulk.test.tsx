@@ -406,8 +406,6 @@ describe('RecentProjectsStrip bulk selection bar (#75)', () => {
       (node) => node.textContent?.trim(),
     );
     expect(actions).toEqual([
-      'Move to team space',
-      'Move out of team space',
       'Delete selected',
       'Cancel',
     ]);
@@ -426,40 +424,6 @@ describe('RecentProjectsStrip bulk selection bar (#75)', () => {
       (node) => node.textContent?.trim(),
     );
     expect(actions).toEqual(['Cancel']);
-  });
-
-  it('moves every selected project through the workspace move endpoint', async () => {
-    const onProjectShared = vi.fn();
-    const { container } = renderGrid({
-      canManageProjectCollection: true,
-      collaborationEnabled: true,
-      onDelete: () => true,
-      onProjectShared,
-    });
-
-    const bar = enterSelectionMode(container, ['Deck project', 'Media project']);
-    expect(within(bar).getByText('2 selected')).toBeTruthy();
-
-    fireEvent.click(within(bar).getByText('Move to team space'));
-    fireEvent.click(screen.getByText('Confirm move'));
-
-    await waitFor(() => {
-      expect(moveWorkspaceProject).toHaveBeenCalledTimes(2);
-    });
-    expect(
-      moveWorkspaceProject.mock.calls.map(([input]) => [
-        input.projectId,
-        input.visibility,
-      ]),
-    ).toEqual([
-      ['p-deck', 'team'],
-      ['p-media', 'team'],
-    ]);
-    await waitFor(() => {
-      expect(onProjectShared.mock.calls.map(([project]) => project.id)).toEqual(['p-deck', 'p-media']);
-    });
-    // Selection mode closes once the batch is dispatched.
-    expect(container.querySelector('.recent-projects__bulkbar')).toBeNull();
   });
 
   it('confirms before deleting the whole selection', async () => {
@@ -496,7 +460,7 @@ describe('RecentProjectsStrip bulk selection bar (#75)', () => {
     const mutations = [...bar.querySelectorAll('.recent-projects__bulkbar-actions button')].filter(
       (node) => node.textContent?.trim() !== 'Cancel',
     );
-    expect(mutations).toHaveLength(3);
+    expect(mutations).toHaveLength(1);
     for (const button of mutations) {
       expect((button as HTMLButtonElement).disabled).toBe(true);
     }

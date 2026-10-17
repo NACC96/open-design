@@ -1,4 +1,5 @@
-import type { ChatMessage, ChatRunStatus, ChatSessionMode } from './chat.js';
+import type { AgentModelPrefs } from './app-config.js';
+import type { ChatAttachment, ChatMessage, ChatRunStatus, ChatSessionMode } from './chat.js';
 import type { OrchestratorWorkspace } from './workspaces.js';
 import type {
   ProjectContextConnectorRef,
@@ -193,6 +194,10 @@ export interface DesignSystemReviewEntry {
 
 export interface ProjectMetadata {
   kind: ProjectKind;
+  /** Fork attachments awaiting a durable, editable composer draft. */
+  pendingAttachments?: ChatAttachment[];
+  /** The only conversation allowed to consume a fork's pending draft. */
+  pendingDraftConversationId?: string;
   // `live-artifact`: the data-backed live dashboard flow (drives the
   // live-artifact skill/system-prompt path). `web-clone`: website reproduction
   // projects from the Home `Website clone` card — stored as prototypes so they
@@ -336,6 +341,22 @@ export interface ProjectMetadata {
   sharedProjectPlaceholderAt?: number;
 }
 
+/**
+ * The local agent CLI + model choice a project runs with.
+ *
+ * Stamped when a creator names one (the Home composer always sends its live
+ * pick; `od project create --agent`), inherited by forks and duplicates, and
+ * changed only through that project's own picker (`PATCH`, `od project
+ * set-agent`). Absent means an unstamped project — legacy, or created by a
+ * caller that named no agent: it follows the app-config default at run time
+ * until its first in-project change stamps it. Model / reasoning / service
+ * tier keep the `AgentModelPrefs` meaning: absent = the agent CLI's own
+ * default.
+ */
+export interface ProjectExecutionChoice extends AgentModelPrefs {
+  agentId: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -353,6 +374,8 @@ export interface Project {
   // pick a plugin they already selected.
   appliedPluginSnapshotId?: string;
   customInstructions?: string;
+  /** Per-project agent + model choice. See `ProjectExecutionChoice`. */
+  execution?: ProjectExecutionChoice;
   /**
    * The daemon-authoritative visibility from this project's
    * `workspace_projects` row.
@@ -464,6 +487,11 @@ export interface CreateProjectRequest {
   /** Session mode for the default conversation seeded with the project. */
   conversationMode?: ChatSessionMode;
   customInstructions?: string;
+  /**
+   * Agent + model the project runs with. Omitted or `null` → unstamped (the
+   * project follows the app-config default at run time).
+   */
+  execution?: ProjectExecutionChoice | null;
   /** Persisted to metadata.skipDiscoveryBrief for automated project runs. */
   skipDiscoveryBrief?: boolean;
 }
@@ -475,6 +503,8 @@ export interface UpdateProjectRequest {
   pendingPrompt?: string | null;
   metadata?: ProjectMetadata | null;
   customInstructions?: string | null;
+  /** Omitted → unchanged; `null` → clear (follow app-config); object → replace. */
+  execution?: ProjectExecutionChoice | null;
 }
 
 export interface ProjectsResponse {
@@ -688,6 +718,19 @@ export interface DuplicateProjectRequest {
 }
 
 export interface DuplicateProjectResponse extends ProjectResponse {
+  conversationId: string;
+  copiedFiles: string[];
+}
+
+export interface ForkProjectRequest {
+  sourceConversationId: string;
+  sourceMessageId: string;
+  name?: string;
+  /** Omit to copy the source message verbatim; an empty string is allowed. */
+  prompt?: string;
+}
+
+export interface ForkProjectResponse extends ProjectResponse {
   conversationId: string;
   copiedFiles: string[];
 }

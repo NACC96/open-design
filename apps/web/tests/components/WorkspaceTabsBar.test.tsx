@@ -2096,7 +2096,7 @@ describe('WorkspaceTabsBar dock dropdown project actions', () => {
     }
   });
 
-  it('offers rename, duplicate, move-to-team and delete on a team workspace row', async () => {
+  it('offers local row actions without move-to-team on a legacy team workspace row', async () => {
     render(
       <WorkspaceTabsBar
         route={projectRoute}
@@ -2112,7 +2112,6 @@ describe('WorkspaceTabsBar dock dropdown project actions', () => {
     expect(items).toEqual([
       'designs.menuRename',
       'designs.menuDuplicate',
-      'recentProjects.moveToTeam',
       'designs.menuDelete',
     ]);
   });
@@ -2170,32 +2169,6 @@ describe('WorkspaceTabsBar dock dropdown project actions', () => {
     const menu = await openRowMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'designs.menuDuplicate' }));
     await waitFor(() => expect(duplicate).toHaveBeenCalledWith(project.id));
-  });
-
-  it('moves the project into the team space after confirmation', async () => {
-    render(
-      <WorkspaceTabsBar
-        route={projectRoute}
-        projects={[project]}
-        workspaceContext={teamContext}
-        onDeleteProject={vi.fn()}
-      />,
-    );
-    const menu = await openRowMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'recentProjects.moveToTeam' }));
-    const confirm = await screen.findByRole('alertdialog');
-    expect(moveRequests()).toEqual([]);
-    fireEvent.click(within(confirm).getByRole('button', { name: 'recentProjects.confirmMoveToTeam' }));
-    await waitFor(() => expect(moveRequests()).toEqual(['/api/workspaces/ws-team/projects/project-alpha/move']));
-    // Progress shows in the row menu the flow re-opens; success closes it
-    // again (as the rail's row menu does), and the next open reads 已在团队空间.
-    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
-    fireEvent.click(within(screen.getByRole('listbox')).getByRole('button', { name: 'designs.menuMore' }));
-    const item = screen.getByRole('menuitem', { name: 'recentProjects.sharedInTeam' });
-    expect((item as HTMLButtonElement).disabled).toBe(true);
-    // Still the member's own project: the move response is its ownership
-    // witness until the team catalog lists it, so the other actions stay.
-    expect((screen.getByRole('menuitem', { name: 'designs.menuDelete' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('renames in place and commits on Enter', async () => {

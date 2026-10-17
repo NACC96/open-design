@@ -1,0 +1,22 @@
+/* Reasoning-effort select in the execution-settings popover. The shared
+   `Select` primitive supplies the field chrome and the chevron that marks it
+   as a dropdown; this only fits it to the 32px / 12px rhythm of the model
+   trigger beside it (`.inline-switcher__select`). The element-qualified
+   selector outranks the primitive's single-class rules regardless of the
+   order the two stylesheets load in, and leaves its right padding (the
+   chevron's room) untouched. */
+select.reasoningSelect {
+  height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: 10px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+select.reasoningSelect:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}

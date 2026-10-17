@@ -48,6 +48,8 @@ import { assistantMessageNeverHadARun } from '../runtime/chat/host-authored-mess
 import { resolveRecoveryActionBlockReason } from '../runtime/chat/recovery-gating';
 import { canRetainSuccessfulRunForBlockedStrategy } from '../runtime/blocked-strategy-result';
 import { loadConversationTranscript } from '../state/load-conversation-transcript';
+import { ProjectForkRequestError } from '../state/projects';
+import type { ForkProjectRequest } from '@open-design/contracts';
 import { normalizeCustomReason } from '@open-design/contracts/analytics';
 import {
   deletePreviewComment,
@@ -277,6 +279,7 @@ import type {
   DesignSystemSummary,
   OpenTabsState,
   Project,
+  ProjectExecutionChoice,
   ProjectMetadata,
   PreviewComment,
   PreviewCommentAttachment,
@@ -413,6 +416,14 @@ import {
   subscribeHomeAttachmentUploads,
 } from '../state/home-attachment-handoff';
 import { effectiveAgentModelChoice, effectiveAgentModelId } from './agentModelSelection';
+import {
+  effectiveProjectExecution,
+  nextProjectExecutionForAgent,
+  nextProjectExecutionForChoice,
+  projectRunConfig,
+  sameProjectExecution,
+  withProjectExecution,
+} from '../state/project-execution';
 import { mediaExecutionPolicyForProjectMetadata } from '../media/execution-policy';
 import { mediaModelProviderId } from '../media/models';
 import { byokProviderRequiresApiKey } from '../utils/byokProvider';
@@ -940,6 +951,7 @@ interface Props {
     sourceProjectId: string,
     input?: { name?: string },
   ) => Promise<void> | void;
+  onForkProject?: (sourceProjectId: string, input: ForkProjectRequest) => Promise<void>;
   /** Lets the shell spend the optional memory-notification SSE slot only while
    * this project can produce a post-run extraction. */
   onRunActivityChange?: (projectId: string, active: boolean) => void;
@@ -1890,7 +1902,7 @@ function projectMediaVoiceSeed(
 // Carry the creation-time model pick into the conversation ONLY when it belongs
 // to the active BYOK provider. Guards against clobbering a user's Settings
 // default with a model from a different provider — e.g. a SenseAudio user whose
-// image project was created with the dialog's default `vela/gpt-image-2` keeps their
+// image project was created with the dialog's default `codex-gpt-image-2` keeps their
 // configured SenseAudio model instead of being forced to the registry default.
 // AIHubMix's live (`aihubmix-` prefixed) ids resolve via mediaModelProviderId
 // without waiting on the async catalogue, so the AIHubMix path still seeds.
@@ -2115,15 +2127,16 @@ export function ProjectView({
   resolveAuthoritativeProjectName,
   routeFileName,
   routeConversationId = null,
-  config,
+  config: globalConfig,
   agents,
   skills,
   designTemplates,
   designSystems,
   daemonLive,
   onModeChange,
-  onAgentChange,
-  onAgentModelChange,
+  // `onAgentChange` / `onAgentModelChange` write the app-wide default; this
+  // view deliberately never calls them — its picker writes the project's own
+  // stamp (`commitProjectExecution`).
   onApiModelChange,
   onRefreshAgents,
   onOpenSettings,
@@ -2146,11 +2159,42 @@ export function ProjectView({
   onCreateProjectFromDesignSystem,
   onCreateDesignSystemFromProject,
   onDuplicateProject,
+  onForkProject,
   onRunActivityChange,
   creationHandoff = null,
   onCreationHandoffSettled,
 }: Props) {
   const { locale, t } = useI18n();
+  // Per-project agent + model. `globalConfig` is the app-wide default (the
+  // Home picker's last pick, the default for NEW projects); `config` is that
+  // default as seen from THIS project — its own stamped agent and model when it
+  // has one. Every read below goes through the project-scoped `config`, and the
+  // composer's picker writes only this project's stamp
+  // (`commitProjectExecution`), never app-config. `executionOverride` holds an
+  // optimistic write so a stale `onProjectChange({...project})` from an older
+  // closure (the auto-title flow, for one) cannot flip the chip back.
+  const [executionOverride, setExecutionOverride] = useState<{
+    projectId: string;
+    value: ProjectExecutionChoice | null;
+  } | null>(null);
+  const executionStamp =
+    executionOverride?.projectId === project.id
+      ? executionOverride.value
+      : project.execution ?? null;
+  const executionStampRef = useRef(executionStamp);
+  executionStampRef.current = executionStamp;
+  const effectiveExecution = useMemo(
+    () => effectiveProjectExecution(executionStamp, globalConfig),
+    [executionStamp, globalConfig],
+  );
+  const effectiveExecutionRef = useRef(effectiveExecution);
+  effectiveExecutionRef.current = effectiveExecution;
+  const globalConfigRef = useRef(globalConfig);
+  globalConfigRef.current = globalConfig;
+  const config = useMemo(
+    () => withProjectExecution(globalConfig, effectiveExecution),
+    [globalConfig, effectiveExecution],
+  );
   const amrAuthRetryMountIdRef = useRef<string | null>(null);
   if (amrAuthRetryMountIdRef.current === null) {
     amrAuthRetryMountIdRef.current = randomUUID();
@@ -2640,6 +2684,9 @@ export function ProjectView({
   const [messageLoadRetryNonce, setMessageLoadRetryNonce] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
+  const [forkingProjectMessageId, setForkingProjectMessageId] = useState<string | null>(null);
+  const forkingProjectRef = useRef(false);
+  const [persistedUserMessageIds, setPersistedUserMessageIds] = useState<Set<string>>(() => new Set());
   const [activePluginActionPaths, setActivePluginActionPaths] = useState<Set<string>>(() => new Set());
   const [hiddenAssistantPluginActionPaths, setHiddenAssistantPluginActionPaths] = useState<Set<string>>(() => new Set());
   const [forceStreamingPluginMessageIds, setForceStreamingPluginMessageIds] = useState<Set<string>>(() => new Set());
@@ -4072,6 +4119,7 @@ export function ProjectView({
           transcriptController.signal,
         );
         if (cancelled) return;
+        setPersistedUserMessageIds(new Set(list.filter((message) => message.role === 'user').map((message) => message.id)));
         // Capture ownership when this GET is admitted, before queuing React's
         // updater. The same batch may next clear the controller on terminal
         // status and enqueue its final buffer flush. Reading refs inside the
@@ -5434,6 +5482,8 @@ export function ProjectView({
       void saveMessage(project.id, activeConversationId, m, {
         ...options,
         workspaceContext: projectRunWorkspaceContext,
+      }).then((stored) => {
+        if (stored?.role === 'user') setPersistedUserMessageIds((current) => new Set(current).add(stored.id));
       });
     },
     [project.id, activeConversationId, projectRunWorkspaceContext],
@@ -8392,6 +8442,15 @@ export function ProjectView({
       meta?: ProjectChatSendMeta,
       baseMessages?: ChatMessage[],
     ) => {
+      // The project's agent + model as of THIS send, not as of this callback's
+      // closure: a pick made an instant ago (the error card's switch-model-
+      // then-retry path calls straight through) must already apply.
+      const config = projectRunConfig(
+        globalConfigRef.current,
+        effectiveExecutionRef.current,
+        meta?.strategyTaskExecutionId,
+        messages,
+      );
       if (projectMutationReadOnly) return false;
       if (!activeConversationId) return false;
       if (messagesConversationIdRef.current !== activeConversationId) return false;
@@ -9017,6 +9076,7 @@ export function ProjectView({
               workspaceContext: projectRunWorkspaceContext,
             }),
           ).then((stored) => {
+            if (stored?.role === 'user') setPersistedUserMessageIds((current) => new Set(current).add(stored.id));
             if (!stored || stored.content === userMsg.content) return;
             setMessages((current) =>
               current.map((message) =>
@@ -12781,6 +12841,9 @@ export function ProjectView({
   );
   useEffect(() => {
     const pendingPrompt = project.pendingPrompt;
+    // Fork drafts are acknowledged by the composer only after BOTH the text
+    // and complete attachment list have reached durable draft storage.
+    if (project.metadata?.pendingDraftConversationId) return;
     if (!pendingPrompt) return;
     if (autoSendFirstMessageRef.current) {
       autoSendSeedRef.current = pendingPrompt;
@@ -12793,7 +12856,10 @@ export function ProjectView({
         : { projectId: project.id, value: pendingPrompt },
     );
     onClearPendingPrompt();
-  }, [project.id, project.pendingPrompt, onClearPendingPrompt]);
+  }, [project.id, project.pendingPrompt, project.metadata?.pendingDraftConversationId, onClearPendingPrompt]);
+  const initialForkAttachments = project.metadata?.pendingDraftConversationId === activeConversationId
+    ? project.metadata.pendingAttachments ?? []
+    : undefined;
   const chatInitialDraft =
     chatSeed?.value ??
     (
@@ -13172,6 +13238,29 @@ export function ProjectView({
     projectFiles,
     projectIsDesignSystemProject,
   ]);
+
+  const handleForkProject = useCallback(async (message: ChatMessage) => {
+    if (forkingProjectRef.current || !onForkProject || !activeConversationId || projectMutationReadOnly) return;
+    if (!persistedUserMessageIds.has(message.id)) return;
+    forkingProjectRef.current = true;
+    setForkingProjectMessageId(message.id);
+    try {
+      await onForkProject(project.id, { sourceConversationId: activeConversationId, sourceMessageId: message.id });
+    } catch (error) {
+      const code = error instanceof ProjectForkRequestError ? error.code : 'FORK_FAILED';
+      const messageText = code === 'FORK_ATTACHMENT_UNAVAILABLE' && error instanceof ProjectForkRequestError
+        ? t('chat.forkProjectAttachmentUnavailable', { name: error.attachmentName ?? '' })
+        : code === 'FORK_MESSAGE_NOT_FOUND'
+          ? t('chat.forkProjectMessageUnavailable')
+          : code === 'FORK_PLUGIN_UNAVAILABLE'
+            ? t('chat.forkProjectPluginUnavailable')
+            : t('chat.forkProjectFailed');
+      setProjectActionsToast({ message: messageText, details: null, tone: 'error' });
+    } finally {
+      forkingProjectRef.current = false;
+      setForkingProjectMessageId(null);
+    }
+  }, [activeConversationId, onForkProject, persistedUserMessageIds, project.id, projectMutationReadOnly, t]);
 
   const handleDuplicateProject = useCallback(() => {
     if (projectDuplicateStarting || !onDuplicateProject) return;
@@ -13552,6 +13641,44 @@ export function ProjectView({
 
   // CLI / agent selector lives below the chat conversation (composer footer),
   // not in the top-right header.
+  // Writes are chained per view so they land in pick order; a failed write
+  // rolls back only when no newer pick has superseded it.
+  const executionWriteChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const executionWriteSeqRef = useRef(0);
+  const commitProjectExecution = useCallback(
+    (next: ProjectExecutionChoice) => {
+      const projectId = project.id;
+      const previousStamp = executionStampRef.current;
+      if (previousStamp && sameProjectExecution(previousStamp, next)) return;
+      const seq = executionWriteSeqRef.current + 1;
+      executionWriteSeqRef.current = seq;
+      executionStampRef.current = next;
+      effectiveExecutionRef.current = next;
+      setExecutionOverride({ projectId, value: next });
+      onProjectChange({ ...projectRef.current, execution: next });
+      const workspaceContext = projectRunWorkspaceContextRef.current;
+      executionWriteChainRef.current = executionWriteChainRef.current
+        .catch(() => undefined)
+        .then(() => patchProject(projectId, { execution: next }, workspaceContext))
+        .then((saved) => {
+          if (saved || executionWriteSeqRef.current !== seq) return;
+          setExecutionOverride({ projectId, value: previousStamp });
+          if (projectRef.current.id === projectId) {
+            onProjectChange({
+              ...projectRef.current,
+              execution: previousStamp ?? undefined,
+            });
+          }
+          setProjectActionsToast({
+            message: t('avatar.executionSaveFailed'),
+            details: null,
+            tone: 'error',
+          });
+        });
+    },
+    [onProjectChange, project.id, t],
+  );
+
   const executionControls = (
     <>
       <AvatarMenu
@@ -13575,7 +13702,14 @@ export function ProjectView({
             agent_id: id,
             ...(project?.id ? { project_id: project.id } : {}),
           });
-          onAgentChange(id);
+          commitProjectExecution(
+            nextProjectExecutionForAgent(
+              effectiveExecutionRef.current,
+              id,
+              globalConfigRef.current,
+              agents,
+            ),
+          );
         }}
         onAgentModelChange={(agentId, choice) => {
           trackComposerBarClick(analytics.track, {
@@ -13586,7 +13720,9 @@ export function ProjectView({
             ...(choice?.model ? { model_id: choice.model } : {}),
             ...(project?.id ? { project_id: project.id } : {}),
           });
-          onAgentModelChange(agentId, choice);
+          commitProjectExecution(
+            nextProjectExecutionForChoice(effectiveExecutionRef.current, agentId, choice),
+          );
           /*
            * 「选完自动重跑」的那一半。只有确实是从报错卡那颗〔更换模型〕进来的
            * 才会有待重跑的那一轮 —— 平时手动换模型不该无端重发。
@@ -13788,6 +13924,8 @@ export function ProjectView({
               shareToOpenDesignBusyMessageId={shareToOpenDesignBusyMessageId}
               forceStreamingMessageIds={forceStreamingPluginMessageIds}
               initialDraft={chatInitialDraft}
+              initialAttachments={initialForkAttachments}
+              onInitialDraftPersisted={initialForkAttachments !== undefined ? onClearPendingPrompt : undefined}
               onboardingStarterPath={onboardingEntryRef.current?.productType ?? null}
               questionFormSubmitDisabled={currentConversationActionDisabled}
               onSubmitQuestionForm={async (text, attachments = [], context, sourceAssistantMessageId, formId) => {
@@ -13796,6 +13934,7 @@ export function ProjectView({
                   ? messages.find((message) => message.id === sourceAssistantMessageId)
                   : undefined;
                 const strategyTaskExecutionId = await resolveQuestionFormStrategyTaskExecutionId({
+                  sourceAgentId: sourceAssistant?.agentId,
                   ...(sourceAssistant?.strategyTaskExecutionId
                     ? { persistedTaskExecutionId: sourceAssistant.strategyTaskExecutionId }
                     : {}),
@@ -13862,6 +14001,9 @@ export function ProjectView({
                 projectMutationReadOnly ? undefined : handleForkFromMessage
               }
               forkingMessageId={forkingMessageId}
+              onForkProject={!projectMutationReadOnly && onForkProject && !projectIsDesignSystemProject ? handleForkProject : undefined}
+              forkingProjectMessageId={forkingProjectMessageId}
+              persistedUserMessageIds={persistedUserMessageIds}
               onNewConversation={handleNewConversation}
               newConversationDisabled={newConversationDisabled}
               conversations={conversations}

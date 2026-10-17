@@ -1,3 +1,4 @@
+import { isRetiredAgentId } from '../state/local-ai-only';
 import type {
   ChatRunStatusResponse,
   StrategyTaskProjectionV2,
@@ -14,14 +15,18 @@ type FetchRunStatus = (runId: string) => Promise<ChatRunStatusResponse | null>;
 export async function resolveQuestionFormStrategyTaskExecutionId(input: {
   persistedTaskExecutionId?: string;
   sourceRunId?: string;
+  sourceAgentId?: string;
   fetchRunStatus: FetchRunStatus;
 }): Promise<string | undefined> {
+  // A frozen Cloud task cannot switch runtimes. Keep its history, and let
+  // answers become an ordinary turn on the user's selected local agent.
+  if (isRetiredAgentId(input.sourceAgentId)) return undefined;
   if (input.persistedTaskExecutionId) return input.persistedTaskExecutionId;
   if (!input.sourceRunId) return undefined;
 
   try {
     const status = await input.fetchRunStatus(input.sourceRunId);
-    return status?.strategyTask?.taskExecutionId;
+    return isRetiredAgentId(status?.agentId) ? undefined : status?.strategyTask?.taskExecutionId;
   } catch {
     return undefined;
   }

@@ -1,15 +1,6 @@
 // @vitest-environment jsdom
 
-// Regression for the workspace-team P0 (飞书 rec recvq3NXctqR6L): the 团队
-// resource scope disappeared from the 扩展 marketplace for a genuine team
-// workspace that happens to be on a free/unpaid tier.
-//
-// The 团队 pill had been gated on `hasTeamPlan` (a BILLING check). A team on a
-// free tier reports `billingState: 'free'`, `planId: null`, and an empty
-// `membershipTier`, so the plan gate hid the scope — even though the workspace
-// is a real team with a shared resource plane the daemon serves and shares from
-// regardless of plan. The gate now matches the daemon: team IDENTITY, via
-// `workspaceContextHasTeamIdentity`.
+// Local-only resource UI keeps workspace authority while hiding team controls.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
@@ -247,12 +238,12 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
     expect(urls.filter((url) => url.endsWith('/skills/team'))).toHaveLength(1);
   });
 
-  it('offers the Team scope for a real team workspace even on a free tier', async () => {
+  it('hides the Team scope even for a saved team workspace', async () => {
     const { container } = renderMarketplace();
     await waitFor(() => {
       expect(container.querySelector('.plugin-marketplace__filters')).toBeTruthy();
     });
-    expect(scopeLabels(container)).toContain('Team');
+    expect(scopeLabels(container)).not.toContain('Team');
   });
 
   it('refreshes the Team shared index immediately after a remote plugin event', async () => {
@@ -285,7 +276,7 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
     }));
     await waitFor(() => expect(teamIndexReads).toBe(2));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Team' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Personal' }));
     expect(await screen.findByText('remote-plugin')).toBeTruthy();
   });
 
@@ -327,7 +318,7 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
       ids: ['fresh-team-plugin'],
       resources: [{ id: 'fresh-team-plugin', canUnshare: true }],
     }));
-    fireEvent.click(screen.getByRole('button', { name: 'Team' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Personal' }));
     expect(await screen.findByText('fresh-team-plugin')).toBeTruthy();
 
     initialIndex.resolve(jsonResponse({ ids: [], resources: [] }));
@@ -339,7 +330,7 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
     let teamSkillReads = 0;
     vi.mocked(fetchSkills)
       .mockResolvedValueOnce([])
-      .mockResolvedValue([skill('remote-skill')]);
+      .mockResolvedValue([{ ...skill('remote-skill'), source: 'user' }]);
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/plugins') return jsonResponse({ plugins: [] });
@@ -371,7 +362,7 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
       expect(fetchSkills).toHaveBeenCalledTimes(2);
     });
     fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Team' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Personal' }));
     expect(await screen.findByTestId('plugins-card-remote-skill')).toBeTruthy();
   });
 
@@ -590,7 +581,7 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
     },
   );
 
-  it('replaces shared IDs and metadata on an identity change and discards late results', async () => {
+  it('keeps team-only metadata out of the UI across identity changes and late responses', async () => {
     const sharedA = {
       plugins: deferred<Response>(),
       skills: deferred<Response>(),
@@ -670,9 +661,9 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
       await Promise.resolve();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Team' }));
-    await waitFor(() => expect(screen.getByText('Plugin from B')).toBeTruthy());
-    expect(screen.getByText('Metadata from B')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Personal' }));
+    expect(screen.queryByText('Plugin from B')).toBeNull();
+    expect(screen.queryByText('Metadata from B')).toBeNull();
 
     await act(async () => {
       sharedA.plugins.resolve(jsonResponse({
@@ -698,9 +689,9 @@ describe('ExtensionsMarketplace 团队 scope visibility', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText('Plugin from B')).toBeTruthy();
+    expect(screen.queryByText('Plugin from B')).toBeNull();
     expect(screen.queryByText('Plugin from A')).toBeNull();
-    expect(screen.getByText('Metadata from B')).toBeTruthy();
+    expect(screen.queryByText('Metadata from B')).toBeNull();
     expect(screen.queryByText('Metadata from A')).toBeNull();
   });
 });

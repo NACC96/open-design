@@ -17,6 +17,73 @@ export function defaultAgentModelId(agent: AgentModelSource): string | null {
   );
 }
 
+type AgentReasoningSource<O extends { id: string }> =
+  | {
+      models?: Array<{ id: string; reasoningOptions?: O[] }>;
+      reasoningOptions?: O[];
+    }
+  | null
+  | undefined;
+
+/**
+ * The reasoning-effort options `modelId` offers. The model's own list wins —
+ * an explicit empty list marks a model that takes no effort — and the
+ * agent-level list covers the CLI default and model ids the catalog does not
+ * list. Mirrors the daemon's `reasoningOptionsForModel`, which decides what a
+ * run actually forwards, so every picker shows the same list the run honours.
+ */
+export function agentReasoningOptions<O extends { id: string }>(
+  agent: AgentReasoningSource<O>,
+  modelId: string | null | undefined,
+): O[] | undefined {
+  const modelOptions = agent?.models?.find((model) => model.id === modelId)?.reasoningOptions;
+  return modelOptions ?? agent?.reasoningOptions;
+}
+
+/**
+ * The reasoning half of a model change, for every surface that writes one.
+ *
+ * A saved effort the next model does not offer is cleared — `{ reasoning:
+ * undefined }`, which `mergeAgentModelChoice` and Settings read as a delete —
+ * the same way an incompatible service tier is dropped. Keeping it would leave
+ * the picker showing the model's default while the stored choice still holds
+ * the old level, and switching back to a model that lists it would silently
+ * re-apply a level the user never picked again. A level the next model does
+ * offer is kept, so moving between models with the same list loses nothing.
+ */
+export function reasoningPatchForModelChange<O extends { id: string }>(
+  agent: AgentReasoningSource<O>,
+  nextModelId: string | null | undefined,
+  savedReasoning: string | null | undefined,
+): { reasoning?: undefined } {
+  if (!savedReasoning) return {};
+  const nextOptions = agentReasoningOptions(agent, nextModelId) ?? [];
+  return nextOptions.some((option) => option.id === savedReasoning)
+    ? {}
+    : { reasoning: undefined };
+}
+
+/**
+ * Apply a picker's `{ model, reasoning, serviceTier }` patch to a saved choice.
+ *
+ * An own `undefined` is an explicit clear (a model change dropping a tier or
+ * effort the next model does not offer); an absent key keeps the old value.
+ * Shared by the global app-config writer and the per-project writer so both
+ * surfaces treat a patch the same way.
+ */
+export function mergeAgentModelChoice(
+  previous: AgentModelChoice | undefined,
+  next: { model?: string; reasoning?: string; serviceTier?: string },
+): AgentModelChoice {
+  const merged = { ...(previous ?? {}), ...next };
+  for (const key of ['reasoning', 'serviceTier'] as const) {
+    if (Object.prototype.hasOwnProperty.call(next, key) && next[key] === undefined) {
+      delete merged[key];
+    }
+  }
+  return merged;
+}
+
 export function normalizeAgentModelChoice(
   agent: AgentModelSource,
   choice: AgentModelChoice | undefined,

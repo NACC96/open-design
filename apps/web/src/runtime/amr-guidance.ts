@@ -748,7 +748,6 @@ export function primaryActionForFailure(
 ): RunFailurePrimaryAction {
   if (nature.directFix) return nature.directFix;
   if (nature.transient) return 'retry';
-  if (nature.localDeadEnd) return 'switch-to-cloud';
   return 'contact-support';
 }
 
@@ -955,39 +954,6 @@ function withoutCloudSelfPromotion(ui: RunFailureUi): RunFailureUi {
     primaryAction:
       ui.primaryAction === 'switch-to-cloud' ? 'contact-support' : ui.primaryAction,
   };
-}
-
-/** The hosted agent — the one every rung-3 mapping points at. */
-const CLOUD_NATIVE_AGENT_ID = 'amr';
-
-/**
- * 这一轮跑在**不是** Cloud 的智能体上 —— 也就是 BYOK / 本地 CLI。
- *
- * 抽成具名判据而不是散写 `agentId !== 'amr'`:它是 OPEND-2772 那条不变式的
- * **唯一**判据,`withoutCloudSelfPromotion`(往回摘)和 `withCloudSwitchCta`
- * (往上铺)是同一条线的两侧,分开写迟早会各漂各的。
- */
-function runsOnALocalAgent(agentId: string | null | undefined): boolean {
-  return agentId !== CLOUD_NATIVE_AGENT_ID;
-}
-
-/**
- * OPEND-2772 · 把〔切换到 Cloud〕铺到**每一张** BYOK /
- * 本地 CLI 的报错卡上。
- *
- * 产品 2026-09-07 逐字:「2772 的『统一』是『铺到所有报错』,主 cta 都是切换至
- * cloud」,并且明确「**8-26 推翻掉吧**」—— 被推翻的是 `run-error-catalog.md`
- * §6.Z 那条「不是一律劝切 Cloud、第 1 档永远优先」。在那条规则下,只有 6 类失败
- * 拿得到这颗按钮(登录类 2、限速、上游过载、hard_quota、workspace_credits),
- * 而**不出**的约三十类里包括进程崩了(S19,每月 20,868 次,第二大桶)和没装
- * CLI(S01)。
- *
- * 这里只动**主按钮位**。每一类失败自己的标题 / 正文一个字都没改,阶梯算出来的
- * 那颗动作(换个模型 / 去设置 / 在终端登录 / 重试 …)也一颗都没删 —— 它们让出
- * 主位,退到次级(见 `ChatPane` 的 `errorActionVariant`)。
- */
-function withCloudSwitchCta(ui: RunFailureUi): RunFailureUi {
-  return ui.cloudSwitchCta ? ui : { ...ui, cloudSwitchCta: true };
 }
 
 /**
@@ -1588,9 +1554,7 @@ const AGENT_AGNOSTIC_DETAIL_FAILURE_UI: Record<string, RunFailureUi> = {
 // AMR-specific and then falls through; `withoutCloudSelfPromotion` at the exit
 // keeps that safe by making rung 3 unreachable for a run already on Cloud.
 //
-// The exit has TWO sides and they are the same line read from either end
-// (OPEND-2772): a run on Cloud gets the Cloud CTA stripped, a run on anything
-// else gets it added — every failure, not a hand-picked list.
+// Local AI only: retain runtime-specific diagnosis, without Cloud promotion.
 export function resolveRunFailureUi(
   code: string | null | undefined,
   detail: string | null | undefined,
@@ -1614,10 +1578,10 @@ export function resolveRunFailureUi(
       messageKey: 'chat.runError.regionNotSupportedMessage',
     }
     : ui;
-  return runsOnALocalAgent(agentId)
-    ? withCloudSwitchCta(localizedUi)
-    : withoutCloudSelfPromotion(localizedUi);
+  return withoutCloudSelfPromotion(localizedUi);
 }
+
+const CLOUD_NATIVE_AGENT_ID = 'amr';
 
 function resolveRunFailureUiIgnoringSelfPromotion(
   code: string | null | undefined,

@@ -1,3 +1,4 @@
+import { isVisibleLocalCliAgent } from '../utils/visibleAgents';
 // Hand-off menu in the ChatPane header. The left split button opens the
 // current design project folder in a local editor, while the dropdown also
 // exposes copy-to-CLI prompts for handing the same local folder to code agents.
@@ -57,7 +58,6 @@ interface CliTarget {
 }
 
 const CLI_ORDER = [
-  'amr',
   'claude',
   'codex',
   'opencode',
@@ -82,7 +82,6 @@ const CLI_ORDER = [
 ];
 
 const FALLBACK_CLI_TARGETS: CliTarget[] = [
-  { id: 'amr', name: 'OpenDesign', bin: 'vela', available: false },
   { id: 'claude', name: 'Claude Code', bin: 'claude', available: false },
   { id: 'codex', name: 'Codex CLI', bin: 'codex', available: false },
   { id: 'opencode', name: 'OpenCode', bin: 'opencode-cli', available: false },
@@ -173,7 +172,7 @@ function mergeCliTargets(agents: AgentInfo[] | undefined): CliTarget[] {
   for (const target of FALLBACK_CLI_TARGETS) {
     byId.set(target.id, target);
   }
-  for (const agent of agents ?? []) {
+  for (const agent of (agents ?? []).filter(isVisibleLocalCliAgent)) {
     byId.set(agent.id, {
       id: agent.id,
       name: cliDisplayName(agent),

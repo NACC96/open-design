@@ -48,6 +48,37 @@ describe('nano-banana media generation', () => {
     await writeFile(file, JSON.stringify(data), 'utf8');
   }
 
+  it.each(['nano-banana', 'nano-banana-2', 'nano-banana-2-lite'])(
+    'forwards ordered reference bytes when %s resolves to Google', async (model) => {
+      await writeConfig({ providers: { nanobanana: { baseUrl: TEST_NANOBANANA_BASE_URL } } });
+      const project = path.join(projectsRoot, 'project-1');
+      await mkdir(project, { recursive: true });
+      const first = Buffer.from(PNG_BASE64, 'base64');
+      const second = Buffer.concat([first, Buffer.from('second-reference')]);
+      await writeFile(path.join(project, 'first.png'), first);
+      await writeFile(path.join(project, 'second.png'), second);
+      const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: PNG_BASE64 } }] } }],
+      }), { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await generateMedia({
+        projectRoot, projectsRoot, projectId: 'project-1', surface: 'image', model,
+        prompt: 'Use the first reference subject and the second reference background',
+        image: 'first.png', images: ['first.png', 'second.png'],
+      });
+
+      expect(result.providerId).toBe('nanobanana');
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const init = fetchMock.mock.calls[0]?.[1];
+      expect(JSON.parse(String(init?.body)).contents[0].parts).toEqual([
+        { text: 'Use the first reference subject and the second reference background' },
+        { inlineData: { mimeType: 'image/png', data: first.toString('base64') } },
+        { inlineData: { mimeType: 'image/png', data: second.toString('base64') } },
+      ]);
+    },
+  );
+
   it('renders Nano Banana images through generateContent', async () => {
     await writeConfig({
       providers: {

@@ -29,6 +29,7 @@ import {
   createProject,
   duplicatePluginAsProject,
   duplicateProject,
+  forkProject,
 } from '../src/state/projects';
 import {
   projectWorkspaceContext,
@@ -155,6 +156,13 @@ function installProjectCreationFetch() {
       return Response.json({
         project: { id: 'p-duplicate' },
         conversationId: 'conv-duplicate',
+        copiedFiles: [],
+      });
+    }
+    if (pathname.endsWith('/fork')) {
+      return Response.json({
+        project: { id: 'p-fork' },
+        conversationId: 'conv-fork',
         copiedFiles: [],
       });
     }
@@ -292,6 +300,39 @@ describe('useProjectCollab: project created by the viewer this session', () => {
     }));
 
     expect(project.result.current.viewerOnly).toBe(false);
+  });
+
+  it('keeps a fork writable while scope and collaboration status are pending', async () => {
+    installProjectCreationFetch();
+    await forkProject('p-source', {
+      sourceConversationId: 'conv-source',
+      sourceMessageId: 'message-source',
+    }, DEFAULT_TEAM_CONTEXT);
+
+    const project = renderHook(() => useProjectCollab('p-fork', {
+      workspaceContext: DEFAULT_TEAM_CONTEXT,
+      workspaceContextLoading: true,
+    }));
+
+    expect(project.result.current.viewerOnly).toBe(false);
+    expect(project.result.current.writerAuthority).toBe('allowed');
+  });
+
+  it('does not grant fork creation authority in a different workspace', async () => {
+    installProjectCreationFetch();
+    await forkProject('p-source', {
+      sourceConversationId: 'conv-source',
+      sourceMessageId: 'message-source',
+    }, DEFAULT_TEAM_CONTEXT);
+
+    const otherWorkspace = teamContext({ workspaceId: 'ws-other', workspaceMemberId: 'wm-other' });
+    const project = renderHook(() => useProjectCollab('p-fork', {
+      workspaceContext: otherWorkspace,
+      workspaceContextLoading: true,
+    }));
+
+    expect(project.result.current.viewerOnly).toBe(true);
+    expect(project.result.current.writerAuthority).toBe('pending');
   });
 
   it('keeps an unmarked project fail-closed while exact project scope is loading', async () => {

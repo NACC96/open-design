@@ -277,6 +277,32 @@ describe("copyMacPrebundleRuntimeDependencies", () => {
 });
 
 describe("renderMacPackagedConfig", () => {
+  describe("updater opt-out", () => {
+    const root = join(tmpdir(), "od-updater-opt-out-test");
+    const render = (overrides: Partial<ToolPackConfig>) => renderMacPackagedConfig({
+      appVersion: "0.24.1-fork.1",
+      config: makeConfig(root, { namespace: "updater-opt-out", ...overrides }),
+      usePrebundledStandaloneWeb: true,
+    });
+
+    it("bakes an explicit opt-out into a fork package", () => {
+      const rendered = JSON.parse(render({ updateEnabled: false })) as Record<string, unknown>;
+      expect(rendered.updateEnabled).toBe(false);
+    });
+
+    it("leaves a default build byte-identical whether the switch is unset or on", () => {
+      const unset = render({});
+      expect(JSON.parse(unset)).not.toHaveProperty("updateEnabled");
+      expect(render({ updateEnabled: true })).toBe(unset);
+    });
+
+    it("refuses to bake the opt-out into an official release namespace", () => {
+      expect(() => render({ namespace: "release-beta", updateEnabled: false })).toThrow(
+        /refusing to bake the updater opt-out .* official beta release namespace "release-beta"/,
+      );
+    });
+  });
+
   it("omits nodeCommandRelative so packaged mac sidecars use Electron as Node", async () => {
     const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
     try {

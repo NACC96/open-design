@@ -27,6 +27,7 @@ import {
   type OdNextRolloutMode,
 } from '@open-design/contracts';
 
+import { normalizeLocalAgentId } from './runtimes/local-ai-policy.js';
 import { expandHomePrefix } from './home-expansion.js';
 
 import {
@@ -580,7 +581,9 @@ function applyConfigValue(
     return;
   }
   if (key === 'agentId' || key === 'skillId' || key === 'designSystemId') {
-    if (typeof value === 'string' || value === null) target[key] = value;
+    if (typeof value === 'string' || value === null) {
+      target[key] = key === 'agentId' ? normalizeLocalAgentId(value) : value;
+    }
     return;
   }
   if (key === 'agentModels') {

@@ -53,13 +53,13 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import historyStyles from './chat/ConversationHistoryDock.module.css';
+import { ForkProjectAction } from './chat/ForkProjectAction';
 import { hasOdCard, OD_NEXT_STRATEGY_ID, type ProjectMediaTask } from '@open-design/contracts';
 import { useAnalytics } from '../analytics/provider';
 import { getResolvedDeviceId } from '../analytics/client';
 import {
   trackChatPanelClick,
   trackMessageQueueClick,
-  trackRunFailedToastGoAmrClick,
   trackRunFailedToastSurfaceView,
   trackRunRecoveryActionClick,
   trackRunRecoveryActionSurfaceView,
@@ -184,7 +184,6 @@ import {
   RunErrorCard,
   RunErrorCardAction,
 } from './chat/RunErrorCard';
-import { UpgradeCard } from './chat/UpgradeCard';
 import { SupportDialog } from './chat/SupportDialog';
 import { Toast } from './Toast';
 import { supportChannels } from './chat/support-channels';
@@ -727,6 +726,8 @@ interface Props {
   shareToOpenDesignBusyMessageId?: string | null;
   forceStreamingMessageIds?: Set<string>;
   initialDraft?: string;
+  initialAttachments?: ChatAttachment[];
+  onInitialDraftPersisted?: () => void;
   // Product path of the Home recommendation that started this project. When
   // set (and concrete), the empty-conversation starter cards show that path's
   // starters — one-click composer replacements — instead of the generic set.
@@ -750,6 +751,9 @@ interface Props {
   /** `anchorId` 同上。 */
   onArtifactDownload?: (fileName: string, anchorId?: string) => void;
   onForkFromMessage?: (assistantMessage: ChatMessage) => void;
+  onForkProject?: (message: ChatMessage) => void;
+  forkingProjectMessageId?: string | null;
+  persistedUserMessageIds?: ReadonlySet<string>;
   forkingMessageId?: string | null;
   // Header "+" button — kicks off ProjectView's create-conversation flow.
   onNewConversation?: () => void;
@@ -1354,6 +1358,8 @@ export function ChatPane({
   shareToOpenDesignBusyMessageId,
   forceStreamingMessageIds,
   initialDraft,
+  initialAttachments,
+  onInitialDraftPersisted,
   onboardingStarterPath = null,
   composerPlaceholder,
   onSubmitQuestionForm,
@@ -1365,6 +1371,9 @@ export function ChatPane({
   onArtifactDownload,
   onForkFromMessage,
   forkingMessageId = null,
+  onForkProject,
+  forkingProjectMessageId = null,
+  persistedUserMessageIds,
   onNewConversation,
   newConversationDisabled = false,
   conversations,
@@ -2101,9 +2110,11 @@ export function ChatPane({
   // meaningful for a failed run (retryAssistant present).
   const runFailureUi = retryAssistant
     ? resolveRunFailureUi(
-        failedRunErrorEvent?.code,
+        retryAssistant.agentId === 'amr' && failedRunErrorEvent?.code?.startsWith('AMR_')
+          ? undefined
+          : failedRunErrorEvent?.code,
         failedRunErrorEvent?.failureDetail,
-        retryAssistant.agentId,
+        retryAssistant.agentId === 'amr' ? undefined : retryAssistant.agentId,
         // The raw upstream sentence, so a failure whose copy names something the
         // gateway reported (the instant a model window reopens) can read it back
         // out. Same string the card renders under 「查看详情」.
@@ -2374,8 +2385,11 @@ export function ChatPane({
     failedRunErrorEvent?.code,
     rawError,
   );
+  // Fork (Local AI only): the Cloud balance / upgrade card is never drawn, so
+  // it can never take a failure off the white card (only an old Cloud run's
+  // insufficient-balance failure could have handed one over).
   const balanceCardCannotTakeTheHandoff =
-    failureCardHandedToAmrBalanceCard(runFailureUi) && amrBalanceCardUnavailable;
+    failureCardHandedToAmrBalanceCard(runFailureUi);
   const reconnectRowCannotTakeTheHandoff = reconnectRowOwnsFailure && !reconnect;
   const handoffTargetIsAbsent =
     balanceCardCannotTakeTheHandoff || reconnectRowCannotTakeTheHandoff;
@@ -2473,12 +2487,9 @@ export function ChatPane({
     !accessErrorCopy && retryAssistant && failedRunErrorEvent ? retryAssistant.id : null;
   // OPEND-2807 / G16: the failed run selects one fixed recovery action.
   // The classifier still owns approved copy and handoffs, never extra buttons.
-  const failedRunUsesCloud = retryAssistant?.agentId === 'amr';
-  const showCloudRetry = Boolean(retryAssistant && failedRunUsesCloud && onRetry);
-  const showCloudSwitchCta = Boolean(
-    retryAssistant && !failedRunUsesCloud
-    && (onSwitchToAmrAndRetry || onOpenAmrSettings),
-  );
+  // Fork (Local AI only): every run is a local CLI run and there is no Cloud
+  // to switch to, so that one action is always Retry on the same agent.
+  const showRetry = Boolean(retryAssistant && onRetry);
   const [supportDialogOpen, setSupportDialogOpen] = useState(false);
   // The separate balance card retains its existing plans entry.
   const openAmrPlans = useCallback((entrySource: 'chat_upgrade_card') => {
@@ -2499,10 +2510,9 @@ export function ChatPane({
   const visibleRecoveryActionTypes = useMemo(() => {
     const actions: TrackingRunRecoveryActionType[] = [];
     if (!displayError) return actions;
-    if (showCloudRetry) actions.push('manual_retry');
-    if (showCloudSwitchCta && onSwitchToAmrAndRetry) actions.push('switch_runtime_retry');
+    if (showRetry) actions.push('manual_retry');
     return actions;
-  }, [displayError, onSwitchToAmrAndRetry, showCloudRetry, showCloudSwitchCta]);
+  }, [displayError, showRetry]);
   const recoveryAnalyticsProps = useCallback((
     assistantMessage: ChatMessage,
     actionType: TrackingRunRecoveryActionType,
@@ -4055,6 +4065,8 @@ export function ChatPane({
       sendDisabled={sendDisabled}
       inputDisabled={viewerOnly}
       initialDraft={initialDraft}
+      initialAttachments={initialAttachments}
+      onInitialDraftPersisted={onInitialDraftPersisted}
       externalPendingUploads={homeAttachmentUploads}
       onRemoveExternalPendingUpload={onDismissHomeAttachmentUpload}
       composerPlaceholder={composerPlaceholder}
@@ -4428,6 +4440,9 @@ export function ChatPane({
                     onAmrBalanceUpgrade ?? (() => openAmrPlans('chat_upgrade_card'))
                   }
                   onResendUserMessage={onResendUserMessage}
+                  onForkProject={viewerOnly ? undefined : onForkProject}
+                  forkingProjectMessageId={forkingProjectMessageId}
+                  persistedUserMessageIds={persistedUserMessageIds}
                   onRetryImage={handleRetryImage}
                   projectId={projectId}
                   projectKindForTracking={projectKindForTracking}
@@ -4518,7 +4533,7 @@ export function ChatPane({
                           {t('chat.runError.contactSupportCta')}
                         </RunErrorCardAction>
                         <ExportLogsAction />
-                        {showCloudRetry && retryAssistant && onRetry ? (
+                        {showRetry && retryAssistant && onRetry ? (
                           <RunErrorCardAction
                             type="button"
                             variant="primary"
@@ -4531,40 +4546,6 @@ export function ChatPane({
                           >
                             <Icon name="refresh" size={11} />
                             {t(retryLabelKey)}
-                          </RunErrorCardAction>
-                        ) : null}
-                        {showCloudSwitchCta ? (
-                          <RunErrorCardAction
-                            type="button"
-                            variant="primary"
-                            data-testid="chat-error-switch-to-cloud"
-                            // `handleSwitchToAmrAndRetry` 头一行就是同一道门控;
-                            // 挡住时这颗按钮点下去连设置面板都不会开。
-                            disabled={recoveryActionsDisabled}
-                            onClick={() => {
-                              trackRunFailedToastGoAmrClick(analytics.track, {
-                                page_name: 'chat_panel',
-                                area: 'chat_panel',
-                                element: 'go_amr',
-                              });
-                              recordAmrEntry(
-                                analytics.track,
-                                'chat_error_switch_retry_card',
-                                new Date(),
-                                { metricsConsent: config?.telemetry?.metrics === true },
-                              );
-                              if (retryAssistant && onSwitchToAmrAndRetry) {
-                                trackRecoveryClick(retryAssistant, 'switch_runtime_retry', {
-                                  agentProviderId: 'amr',
-                                  modelId: config?.agentModels?.amr?.model?.trim() || 'default',
-                                });
-                                onSwitchToAmrAndRetry(retryAssistant);
-                              } else {
-                                onOpenAmrSettings?.();
-                              }
-                            }}
-                          >
-                            {t('chat.amrCard.switchCta')}
                           </RunErrorCardAction>
                         ) : null}
                       </>
@@ -4583,14 +4564,6 @@ export function ChatPane({
                   * 剩在这儿的是拦截档:那一轮已经被 `retractPaintedTurn` 收回,
                   * 没有 run 也就没有轮次,读数不摆在末尾就彻底没地方说了。
                   */}
-                {tailAmrBalanceCardUsd != null ? (
-                  <UpgradeCard
-                    balanceUsd={tailAmrBalanceCardUsd}
-                    onUpgrade={
-                      onAmrBalanceUpgrade ?? (() => openAmrPlans('chat_upgrade_card'))
-                    }
-                  />
-                ) : null}
                 {/*
                  * 组件 22(重连,第 82–84 格 · S29):产品裁决用设计稿现有的设计,
                  * 位置在**会话中最后一行**。`reconnect` 为空就整行不在 ——
@@ -5188,6 +5161,9 @@ function ChatRows({
   lowBalanceTurnCards,
   onLowBalanceTurnCardUpgrade,
   onResendUserMessage,
+  onForkProject,
+  forkingProjectMessageId,
+  persistedUserMessageIds,
   onRetryImage,
   projectId,
   projectKindForTracking,
@@ -5267,6 +5243,9 @@ function ChatRows({
   /** 升级卡那颗按钮。落点由宿主决定,和流水末尾那张同一个 handler。 */
   onLowBalanceTurnCardUpgrade?: () => void;
   onResendUserMessage?: (message: ChatMessage) => void;
+  onForkProject?: (message: ChatMessage) => void;
+  forkingProjectMessageId?: string | null;
+  persistedUserMessageIds?: ReadonlySet<string>;
   /** 生图失败格的「重试」—— 见 ChatPane 的 handleRetryImage(D59) */
   onRetryImage?: (row: { total: number; done: number; failed: number }, index: number) => void;
   streaming: boolean;
@@ -5394,15 +5373,12 @@ function ChatRows({
           t={t}
           highlighted={highlightedUserMessageId === m.id}
           onResend={onResendUserMessage}
+          onForkProject={persistedUserMessageIds?.has(m.id) && !m.sendFailed ? onForkProject : undefined}
+          forkProjectBusy={forkingProjectMessageId === m.id}
+          forkProjectDisabled={Boolean(forkingProjectMessageId)}
         />
       );
     }
-    /*
-     * 这一轮结束时留下的那张升级卡(T61)。画在助手消息**紧下面、同一行内**:
-     * 位置由 DOM 顺序本身保证,新一轮追加在后面,它自然就留在原处 ——
-     * 不需要任何「记住第几个位置」的计算,也就没有算错的可能。
-     */
-    const turnBalanceUsd = lowBalanceTurnCards?.get(m.id);
     const assistantRow = (
       <AssistantMessage
         message={m}
@@ -5512,13 +5488,8 @@ function ChatRows({
         nextStepVariant={nextStepVariant}
       />
     );
-    if (turnBalanceUsd == null) return assistantRow;
-    return (
-      <>
-        {assistantRow}
-        <UpgradeCard balanceUsd={turnBalanceUsd} onUpgrade={onLowBalanceTurnCardUpgrade} />
-      </>
-    );
+    // Fork (Local AI only): no Cloud balance / upgrade card under a turn.
+    return assistantRow;
   };
 
   if (items.length === 0) return null;
@@ -6610,6 +6581,9 @@ const UserMessage = memo(UserMessageImpl);
   t,
   highlighted,
   onResend,
+  onForkProject,
+  forkProjectBusy = false,
+  forkProjectDisabled = false,
 }: {
   message: ChatMessage;
   projectId: string | null;
@@ -6617,6 +6591,9 @@ const UserMessage = memo(UserMessageImpl);
   onRequestOpenFile?: (name: string) => void;
   /** 发送失败时那颗常驻的「重试」(稿子第 49 / 50 格) */
   onResend?: (message: ChatMessage) => void;
+  onForkProject?: (message: ChatMessage) => void;
+  forkProjectBusy?: boolean;
+  forkProjectDisabled?: boolean;
   /** Legacy mirror-fixture inputs are accepted but intentionally not rendered. */
   onRequestPluginDetails?: (pluginId: string) => void;
   onRequestDesignSystemDetails?: (system: DesignSystemSummary) => void;
@@ -6707,22 +6684,22 @@ const UserMessage = memo(UserMessageImpl);
             ))}
           </div>
         ) : null}
-        {message.content ? (
+        {message.content || attachments.length > 0 ? (
           <div className="user-text-wrap">
             {isDesignSystemWorkspaceRequest ? (
               <UserStatusCard
                 title={t('chat.designSystemStatus.title')}
                 description={t('chat.designSystemStatus.description')}
               />
-            ) : (
+            ) : message.content ? (
               <UserBubble content={displayContent} t={t} />
-            )}
+            ) : null}
             <div className="user-actions">
               {/* 稿子**渲染出来**是「时间 → 复制 → 重试」(它的说明文字写的是「时间在最右」,
                   和自己的 DOM 打架;用户 2026-08-26 指认以渲染为准)。
                   时间不是动作,所以不给按钮那套 30px 命中框。 */}
               {clock ? <span className="user-actions-time">{clock}</span> : null}
-              <button
+              {message.content ? <button
                 type="button"
                 className="ghost user-copy-btn"
                 onClick={handleCopy}
@@ -6730,7 +6707,16 @@ const UserMessage = memo(UserMessageImpl);
                 title={copied ? t('chat.copyDone') : t('chat.copyPrompt')}
               >
                 <Icon name={copied ? 'check' : 'copy'} size={16} />
-              </button>
+              </button> : null}
+              {onForkProject ? (
+                <ForkProjectAction
+                  busy={forkProjectBusy}
+                  disabled={forkProjectDisabled}
+                  label={t('chat.forkProject')}
+                  busyLabel={t('chat.forkProjectBusy')}
+                  onClick={() => onForkProject(message)}
+                />
+              ) : null}
               {/* 发送失败那颗「重试」(稿子第 49 / 50 格的 `.msg-act .keep`):
                   和时间 / 复制**同一行**,但不跟着 hover 出没 —— 第 50 格的状态名
                   写的就是「时间与复制浮出,重试常驻」。 */}

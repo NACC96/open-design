@@ -11,6 +11,7 @@
 import type {
   ChatRunStatus,
   ChatRunStatusResponse,
+  ProjectExecutionChoice,
   ProjectMetadata as ContractProjectMetadata,
   StrategyTaskProjectionV2,
 } from '@open-design/contracts';
@@ -50,6 +51,8 @@ export interface ProjectRecord {
   designSystemId?: string | null;
   metadata?: ProjectMetadata;
   appliedPluginSnapshotId?: string | null;
+  /** Per-project agent + model stamp (`projects.execution_json`). */
+  execution?: ProjectExecutionChoice | null;
 }
 
 export function toJsonRecord(value: unknown): JsonRecord {

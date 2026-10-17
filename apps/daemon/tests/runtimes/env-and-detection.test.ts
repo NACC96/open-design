@@ -1064,12 +1064,55 @@ test('detectAgents records Antigravity permission capability from stderr help ou
       const detected = agents.find((agent) => agent.id === 'antigravity');
 
       assert.equal(detected?.available, true);
+      // agy 1.0.3's help has no `--output-format`, so the stream-json
+      // transport capability is recorded as absent rather than omitted.
       assert.deepEqual(agentCapabilities.get('antigravity'), {
         skipPermissions: true,
+        streamJson: false,
       });
       assert.ok(
         antigravity.buildArgs('', [], [], {}).includes('--dangerously-skip-permissions'),
       );
+    });
+  } finally {
+    agentCapabilities.delete('antigravity');
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('detectAgents records Antigravity stream-json capability from stderr help output', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-antigravity-stream-capability-'));
+  try {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+      const bin = join(dir, 'agy');
+      writeFileSync(
+        bin,
+        '#!/bin/sh\n' +
+          'if [ "$1" = "--version" ]; then echo "agy 1.3.4"; exit 0; fi\n' +
+          'if [ "$1" = "--help" ]; then\n' +
+          '  echo "--dangerously-skip-permissions" >&2\n' +
+          '  echo "--output-format <text|json|stream-json>" >&2\n' +
+          '  exit 0\n' +
+          'fi\n' +
+          'exit 0\n',
+      );
+      chmodSync(bin, 0o755);
+      process.env.PATH = dir;
+      process.env.OD_AGENT_HOME = dir;
+      agentCapabilities.delete('antigravity');
+
+      const agents = await detectAgents();
+      const detected = agents.find((agent) => agent.id === 'antigravity');
+
+      assert.equal(detected?.available, true);
+      assert.deepEqual(agentCapabilities.get('antigravity'), {
+        skipPermissions: true,
+        streamJson: true,
+      });
+      // The registry payload reports the baseline transport; the upgrade is a
+      // per-run decision and its metadata stays out of `/api/agents`.
+      assert.equal(detected?.streamFormat, 'plain');
+      assert.equal('structuredStreamUpgrade' in (detected ?? {}), false);
     });
   } finally {
     agentCapabilities.delete('antigravity');

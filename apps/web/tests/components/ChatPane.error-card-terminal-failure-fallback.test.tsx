@@ -166,10 +166,10 @@ describe('终态失败 + 说不出原因:兜底报错卡', () => {
     const message = failedRunWithNothingToSay();
     const { onRetry, onSwitchToAmrAndRetry } = renderChat(message);
 
-    fireEvent.click(screen.getByTestId('chat-error-switch-to-cloud'));
-    expect(onSwitchToAmrAndRetry).toHaveBeenCalledExactlyOnceWith(message);
-    expect(screen.queryByTestId('chat-error-retry')).toBeNull();
-    expect(onRetry).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('chat-error-retry'));
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith(message, 'manual_retry');
+    expect(screen.queryByTestId('chat-error-switch-to-cloud')).toBeNull();
+    expect(onSwitchToAmrAndRetry).not.toHaveBeenCalled();
   });
 
   it('〔联系支持〕〔导出日志〕这两条不挑失败类型的出路也在', () => {
@@ -188,10 +188,10 @@ describe('终态失败 + 说不出原因:兜底报错卡', () => {
       expect(screen.getByTestId('chat-run-error-description').textContent).toBe(
         'chat.runError.fallbackMessage',
       );
-      fireEvent.click(screen.getByTestId('chat-error-switch-to-cloud'));
-      expect(onSwitchToAmrAndRetry).toHaveBeenCalledExactlyOnceWith(message);
-      expect(screen.queryByTestId('chat-error-retry')).toBeNull();
-      expect(onRetry).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId('chat-error-retry'));
+      expect(onRetry).toHaveBeenCalledExactlyOnceWith(message, 'manual_retry');
+      expect(screen.queryByTestId('chat-error-switch-to-cloud')).toBeNull();
+      expect(onSwitchToAmrAndRetry).not.toHaveBeenCalled();
     },
   );
 

@@ -31,6 +31,22 @@ describe('SettingsDialog media providers', () => {
     );
   });
 
+  it('shows Codex Subscription without API key or Base URL fields', () => {
+    renderDialog({
+      ...DEFAULT_CONFIG,
+      mediaProviders: {},
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Codex Subscription/ }));
+
+    expect(screen.getByRole('heading', { name: 'Codex Subscription' })).toBeTruthy();
+    expect(screen.getByText(/local Codex CLI ChatGPT login \(run `codex login`\)/)).toBeTruthy();
+    expect(screen.getAllByText('No key required').length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText('Codex Subscription API key')).toBeNull();
+    expect(screen.queryByLabelText('Codex Subscription Base URL')).toBeNull();
+    expect(screen.queryByRole('tab', { name: /OpenDesign Cloud/ })).toBeNull();
+  });
+
   it('shows daemon fallback notice and reloads media providers from daemon', async () => {
     const reloadMock = vi.fn(async () => ({
       openai: {

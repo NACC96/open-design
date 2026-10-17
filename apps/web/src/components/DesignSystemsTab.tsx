@@ -211,9 +211,8 @@ export function DesignSystemsTab({
     notifyAction('loading', message);
   };
   const [designSystemCollection, setDesignSystemCollection] = useState<DesignSystemCollection>('mine');
-  // The 团队 collection is a team-workspace surface (B's resource plane is
-  // team-only): signed-out / personal-workspace users get no team tab, and a
-  // sign-out while on it falls back to 你的体系 (#5517 signed-out form).
+  // Retain workspace authority for existing local copies, without exposing
+  // collaboration navigation or mutations.
   const workspaceState = useWorkspaceContext();
   const { context: workspaceContext } = workspaceState;
   const resourceReadIdentity = resolveWorkspaceResourceReadIdentity(workspaceState);
@@ -226,17 +225,12 @@ export function DesignSystemsTab({
   isActiveRef.current = isActive;
   const teamSharedStaleRef = useRef(false);
   const workspaceIdentity = workspaceIdentityCacheKey(workspaceContext);
-  // Gate on TEAM IDENTITY — the same predicate the daemon uses to accept a hub
-  // share (workspaceContextHasTeamIdentity; see team-resource-share.ts) — NOT on
-  // the billing plan. A team on a free/unpaid tier (trial, lapsed, or billing not
-  // yet resolved) still has a real team resource plane with shared design
-  // systems; gating on the plan hid the collection from those teams even though
-  // the daemon serves and shares their resources. Personal / signed-out sessions
-  // have no team plane and correctly get no team tab.
+  // Keep team identity for authoritative ownership reads, independently of
+  // the local-only presentation. It must not expose Team navigation/actions.
   const hasTeamWorkspace = workspaceContextHasTeamIdentity(workspaceContext);
   useEffect(() => {
-    if (designSystemCollection === 'team' && !hasTeamWorkspace) setDesignSystemCollection('mine');
-  }, [designSystemCollection, hasTeamWorkspace]);
+    if (designSystemCollection === 'team') setDesignSystemCollection('mine');
+  }, [designSystemCollection]);
   // Ids of the caller's design systems shared into the team scope. The daemon is
   // the source of truth (it publishes them to the resource hub); we mirror the
   // list here so the "team" collection and the per-system share action stay in
@@ -289,11 +283,11 @@ export function DesignSystemsTab({
     [systems],
   );
 
+  // Local copies stay readable without a Team tab. Detail actions still use
+  // the retained Workspace authority and ownership metadata below.
   const userSystems = useMemo(
-    () => systems.filter((system) => (
-      isUserSystem(system) &&
-      !system.teamSynced &&
-      !teamSharedIds.has(system.id)
+    () => systems.filter((system) => isUserSystem(system) && (
+      !system.teamSynced || teamSharedIds.has(system.id)
     )),
     [systems, teamSharedIds],
   );
@@ -411,7 +405,7 @@ export function DesignSystemsTab({
     const sys = systems.find((s) => s.id === pendingFocus);
     if (!sys) return; // not in the loaded list yet — wait for the next refresh
     if (isUserSystem(sys)) {
-      setDesignSystemCollection(teamSharedIds.has(sys.id) ? 'team' : 'mine');
+      setDesignSystemCollection('mine');
     }
     setPreviewId(pendingFocus);
     setPendingFocus(null);
@@ -902,11 +896,6 @@ export function DesignSystemsTab({
 
   const scopeTabs = [
     { value: 'mine' as const, label: t('dsManager.yourSystems'), count: userSearched.length },
-    ...(hasTeamWorkspace
-      ? [{ value: 'team' as const, label: t('pluginsView.tab.team'), count: teamSearched.length }]
-      : []),
-    // #5517 ships three scopes only. The enterprise placeholder tab advertised a
-    // surface that does not exist yet, so it leaves the row.
     { value: 'official' as const, label: t('dsManager.officialPresets'), count: queryScoped.length },
   ];
 
@@ -1223,10 +1212,8 @@ export function DesignSystemsTab({
           onDelete={deleteSystem}
           onSystemsRefresh={onSystemsRefresh}
           onActionFeedback={notifyAction}
-          onShareToTeam={handleShareToTeam}
           isTeamShared={teamSharedIds.has(selectedSystem.id)}
           sharing={sharingId === selectedSystem.id}
-          onUnshareFromTeam={handleUnshareFromTeam}
           canUnshareFromTeam={teamSharedMeta.get(selectedSystem.id)?.canUnshare === true}
           unsharing={unsharingId === selectedSystem.id}
         />

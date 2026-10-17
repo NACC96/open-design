@@ -1969,11 +1969,26 @@ test('[P0] @critical project detail composer keeps Local CLI and BYOK model choi
   await createProject(page, 'Composer model mode isolation');
   await expectWorkspaceReady(page);
 
-  // Picking a Local CLI model must not touch the stored BYOK model: the two
-  // live in separate config slots (`agentModels[agentId].model` vs `model`).
+  // A model picked in the project composer belongs to THIS project (its
+  // execution stamp), so it must touch neither global slot: not the stored
+  // BYOK model (`model`) and not the Local CLI default (`agentModels`).
+  const projectId = new URL(page.url()).pathname.split('/')[2]!;
+  const projectPatch = page.waitForRequest(
+    (request) =>
+      request.method() === 'PATCH'
+      && request.url().endsWith(`/api/projects/${encodeURIComponent(projectId)}`),
+  );
   await pickComposerModel(page, /^GPT 5\.5$/i);
+  expect((await projectPatch).postDataJSON()).toMatchObject({
+    execution: { agentId: 'codex', model: 'gpt-5.5' },
+  });
 
-  await expect.poll(async () => page.evaluate((key) => {
+  const { menu } = await openComposerAgentMenu(page);
+  await expect(
+    menu.getByTestId('avatar-model-list').locator('.avatar-model-option.is-active'),
+  ).toContainText(/GPT 5\.5/i);
+
+  expect(await page.evaluate((key) => {
     const raw = window.localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   }, STORAGE_KEY)).toMatchObject({
@@ -1981,14 +1996,9 @@ test('[P0] @critical project detail composer keeps Local CLI and BYOK model choi
     agentId: 'codex',
     model: 'gpt-4o-2024-05-13',
     agentModels: {
-      codex: { model: 'gpt-5.5' },
+      codex: { model: 'default' },
     },
   });
-
-  const { menu } = await openComposerAgentMenu(page);
-  await expect(
-    menu.getByTestId('avatar-model-list').locator('.avatar-model-option.is-active'),
-  ).toContainText(/GPT 5\.5/i);
 });
 
 test('[P0] clearing the project design system removes designSystemId from the next run request', async ({ page }) => {

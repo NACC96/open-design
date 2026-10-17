@@ -500,6 +500,22 @@ export interface StrategyTaskContinuationDiagnostic extends ChatSseDiagnosticPay
   taskRunIndex: number | null;
 }
 
+/**
+ * A validated reasoning effort was dropped at spawn because the installed CLI
+ * did not confirm the flag that carries it. `unsupported`: the CLI's `--help`
+ * answered without the flag. `unknown`: no answer even after a re-probe. The
+ * run continues with the CLI's own default effort instead of aborting on an
+ * unknown option.
+ */
+export interface ReasoningEffortOmittedDiagnostic extends ChatSseDiagnosticPayload {
+  type: 'reasoning_effort_omitted';
+  agentId: string;
+  requested: string;
+  flag: string;
+  reason: 'unsupported' | 'unknown';
+  message: string;
+}
+
 export type ChatSseEvent =
   | SseTransportEvent<'start', ChatSseStartPayload>
   | SseTransportEvent<'run_retry_attempted', ChatSseRunRetryAttemptedPayload>

@@ -3104,20 +3104,6 @@ export function HomeView({
       data-variant={variant}
       ref={homeViewRef}
     >
-      {/* `active` gates the portal-escaping campaign dialog to the ACTIVE home
-          view: EntryShell only hides inactive views with display:none, which a
-          document.body portal ignores. A docked composer never runs it at all —
-          it is a Home-page moment, and a second copy of the modal would fight
-          the page one over the same dismissal state. */}
-      {variant === 'dock' ? null : (
-        <DeepSeekV4FlashCampaign
-          audience={deepSeekV4FlashCampaignAudience}
-          active={isActive}
-          onUseCampaignModel={onDeepSeekV4FlashCampaignUseNow}
-          metricsConsent={deepSeekV4FlashCampaignMetricsConsent}
-          installationId={deepSeekV4FlashCampaignInstallationId}
-        />
-      )}
       <HomeHero
         variant={variant}
         collapseSignal={collapseSignal}

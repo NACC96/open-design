@@ -521,6 +521,41 @@ export interface ChatRunCreateResponse {
   /** Analytics-only data-quality signal; it never changes run reuse semantics. */
   analyticsAttributionMismatch?: boolean;
   strategyTask?: StrategyTaskProjectionV2;
+  /** Present only when the request carried `reasoning`. */
+  reasoning?: ChatRunReasoningResolution;
+  /** Present only when the request omitted `agentId` and the daemon chose one. */
+  agentResolution?: ChatRunAgentResolution;
+}
+
+/**
+ * Which agent the daemon picked for a run whose request named none.
+ *
+ * `project` is the project's stamped agent (`Project.execution.agentId`);
+ * `app-config` is the configured default; `first-available` is the first
+ * installed agent. `projectAgentId` is set when the project has a stamp that
+ * could not be used (its CLI is not installed), so a caller can say why the
+ * run fell back.
+ */
+export interface ChatRunAgentResolution {
+  agentId: string;
+  source: 'project' | 'app-config' | 'first-available';
+  projectAgentId?: string;
+}
+
+/**
+ * How the daemon resolved a requested reasoning effort for a new run.
+ *
+ * `applied` is the effort the run forwards after validating `requested`
+ * against the selected agent and model, or `null` when it was dropped (an
+ * unknown level, or one the model does not accept). `options` lists the ids
+ * that agent/model pair does accept. A runtime capability gate can still omit
+ * an applied effort at spawn; that is reported on the run stream as a
+ * `reasoning_effort_omitted` diagnostic.
+ */
+export interface ChatRunReasoningResolution {
+  requested: string;
+  applied: string | null;
+  options: string[];
 }
 
 /**

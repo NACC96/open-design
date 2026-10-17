@@ -29,7 +29,7 @@ import type { AudioKind, MediaAspect } from '../types';
  */
 export type MediaProviderId =
   | 'openai'
-  | 'vela'
+  | 'codex'
   | 'volcengine'
   | 'grok'
   | 'hyperframes'
@@ -93,12 +93,15 @@ export const MEDIA_PROVIDERS: MediaProvider[] = [
     docsUrl: 'https://platform.openai.com/api-keys',
   },
   {
-    id: 'vela',
-    label: 'OpenDesign Cloud',
-    hint: 'Managed image and video generation through Vela',
+    // No API key: renders through the user's local Codex CLI ChatGPT login.
+    // The daemon checks that Codex is installed and signed in before it
+    // dispatches, so a missing CLI or login fails with a clear message.
+    id: 'codex',
+    label: 'Codex Subscription',
+    hint: 'gpt-image-2 through your local Codex CLI ChatGPT login (run `codex login`)',
     integrated: true,
     credentialsRequired: false,
-    settingsVisible: false,
+    docsUrl: 'https://developers.openai.com/codex',
   },
   {
     id: 'volcengine',
@@ -326,11 +329,15 @@ export interface MediaModel {
  * `packages/model-bank/src/aiModels/openai.ts` and friends in lobehub.
  */
 export const IMAGE_MODELS: MediaModel[] = [
-  { id: 'vela/gpt-image-2', label: 'gpt-image-2 (Cloud)', hint: 'OpenDesign Cloud · managed image generation and editing', provider: 'vela', caps: ['t2i', 'i2i'], default: true },
-  { id: 'vela/nano-banana-2', label: 'nano-banana-2 (Cloud)', hint: 'OpenDesign Cloud · managed image generation and editing', provider: 'vela', caps: ['t2i', 'i2i'] },
-  { id: 'vela/nano-banana-2-lite', label: 'nano-banana-2-lite (Cloud)', hint: 'OpenDesign Cloud · fast managed image generation and editing', provider: 'vela', caps: ['t2i', 'i2i'] },
-  { id: 'vela/seedream-5.0', label: 'seedream-5.0 (Cloud)', hint: 'OpenDesign Cloud · managed image generation and editing', provider: 'vela', caps: ['t2i', 'i2i'] },
-  { id: 'vela/seedream-5.0-pro', label: 'seedream-5.0-pro (Cloud)', hint: 'OpenDesign Cloud · high-quality managed image generation and editing', provider: 'vela', caps: ['t2i', 'i2i'] },
+  // Codex Subscription — default, no API key (local Codex CLI ChatGPT login).
+  {
+    id: 'codex-gpt-image-2',
+    label: 'gpt-image-2 (Codex)',
+    hint: 'Codex Subscription · built-in imagegen via your local ChatGPT login',
+    provider: 'codex',
+    caps: ['t2i', 'i2i'],
+    default: true,
+  },
   // OpenAI — fully integrated path.
   {
     id: 'gpt-image-2',
@@ -537,7 +544,6 @@ export const IMAGE_MODELS: MediaModel[] = [
  * Seedance Lite), kling.ts and friends.
  */
 export const VIDEO_MODELS: MediaModel[] = [
-  { id: 'vela/doubao-seedance-2-0-260128', label: 'seedance-2.0 (Cloud)', hint: 'OpenDesign Cloud · managed text/image-to-video · 720p default', provider: 'vela', caps: ['t2v', 'i2v'] },
   // Volcengine — Seedance 2.0 (integrated).
   {
     id: 'doubao-seedance-2-0-260128',
@@ -689,11 +695,22 @@ export const DEFAULT_AUDIO_MODEL: Record<AudioKind, string> = {
  * error so the agent re-plans instead of silently falling back.
  */
 const MEDIA_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  'nano-banana': 'vela/nano-banana-2',
-  'nano-banana-2': 'vela/nano-banana-2',
-  'nano-banana-2-lite': 'vela/nano-banana-2-lite',
-  // Preserve existing project metadata while removing the Codex renderer.
-  'codex-gpt-image-2': 'vela/gpt-image-2',
+  // OpenDesign Cloud (Vela) media models were removed from this fork. Projects
+  // saved with a Cloud image model keep working on the no-key Codex
+  // Subscription route; the Cloud Seedance video model maps to the same model
+  // on Volcengine Ark (bring your own key).
+  'vela/gpt-image-2': 'codex-gpt-image-2',
+  'vela/nano-banana-2': 'codex-gpt-image-2',
+  'vela/nano-banana-2-lite': 'codex-gpt-image-2',
+  'vela/seedream-5.0': 'codex-gpt-image-2',
+  'vela/seedream-5.0-pro': 'codex-gpt-image-2',
+  'vela/doubao-seedance-2-0-260128': 'doubao-seedance-2-0-260128',
+  // Product-facing shorthand for the Nano Banana model family. It names a
+  // model, not a route, so it resolves to the Nano Banana (Google Gemini API)
+  // registry entry rather than silently substituting a different model.
+  'nano-banana': 'gemini-3.1-flash-image-preview',
+  'nano-banana-2': 'gemini-3.1-flash-image-preview',
+  'nano-banana-2-lite': 'gemini-3.1-flash-image-preview',
 };
 
 export function canonicalMediaModelId(id: string): string {
@@ -703,12 +720,12 @@ export function canonicalMediaModelId(id: string): string {
 /**
  * A prompt template recommends a model family; it is not an explicit BYOK
  * provider choice. Legacy first-party templates used the unqualified
- * `gpt-image-2` family id, so keep those on the managed Cloud route while
- * preserving `gpt-image-2` for users who select OpenAI directly.
+ * `gpt-image-2` family id, so keep those on the no-key Codex Subscription
+ * route while preserving `gpt-image-2` for users who select OpenAI directly.
  */
 export function imageModelIdForPromptTemplate(id: string): string {
   const normalized = id.trim();
-  if (normalized === 'gpt-image-2') return 'vela/gpt-image-2';
+  if (normalized === 'gpt-image-2') return 'codex-gpt-image-2';
   return canonicalMediaModelId(normalized);
 }
 

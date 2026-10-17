@@ -11,6 +11,8 @@ import * as release from "@open-design/release";
 import type { SidecarStamp } from "@open-design/sidecar";
 import * as sidecarProto from "@open-design/sidecar-proto";
 
+import { resolvePackagedUpdaterPolicyEnv } from "../src/config.js";
+
 const require = createRequire(import.meta.url);
 function compile(name: string, entry = false): string {
   let source = readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8");
@@ -46,7 +48,12 @@ function evaluate(code: string, modules: Record<string, unknown>, globals: Recor
 }
 
 type Kind = "visible" | "hidden" | "gone" | "duplicate" | "timeout";
-async function scenario(platform: "darwin" | "win32", channel: "stable" | "prerelease", kind: Kind) {
+async function scenario(
+  platform: "darwin" | "win32",
+  channel: "stable" | "prerelease",
+  kind: Kind,
+  bundle: { updateEnabled?: boolean } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "od-entry-handoff-"));
   const trace: string[] = [];
   let alive = kind !== "gone";
@@ -91,7 +98,10 @@ async function scenario(platform: "darwin" | "win32", channel: "stable" | "prere
     },
     "electron": { app: { commandLine: { appendSwitch() {} }, exit: (code: number) => trace.push(`exit:${code}`) } },
     "@open-design/desktop/main": { async recordIncomingUpdateLifecycle() {}, applyOsLocaleSwitch() {}, applyLoopbackConnectionLimitSwitch() {} },
-    "./config.js": { readPackagedConfig: async () => ({ namespace, appVersion: version }) },
+    "./config.js": {
+      readPackagedConfig: async () => ({ namespace, appVersion: version, updateEnabled: bundle.updateEnabled }),
+      resolvePackagedUpdaterPolicyEnv,
+    },
     "./headless-runtime.js": { parsePackagedHeadlessRequest: () => ({ headless: false }), runPackagedMcpActionAgainstExistingDaemon: async () => false },
     "./paths.js": { resolvePackagedNamespacePaths: () => paths },
     "./launch.js": { createPackagedSecondInstanceHandoff: () => ({}) },
@@ -99,6 +109,7 @@ async function scenario(platform: "darwin" | "win32", channel: "stable" | "prere
     "./launcher-runtime.js": { resolvePackagedLauncherRuntime: async (_config: unknown, _paths: unknown, options: { delegated: unknown }) => {
       expect(alive).toBe(false);
       expect(options.delegated).toEqual({ generation: 8, version });
+      trace.push(`updater:${entryProcess.env.OD_UPDATE_ENABLED ?? "unset"}`);
       trace.push("select"); throw selected;
     } },
   };
@@ -107,7 +118,7 @@ async function scenario(platform: "darwin" | "win32", channel: "stable" | "prere
     ...launcherProto.buildLauncherAfterQuitArgs({ targetPid: 4242, timeoutMs: 1000 }),
     ...launcherProto.buildLauncherDelegatedArgs({ generation: 8, version }),
   ])];
-  const entryProcess = { argv, env: {}, platform };
+  const entryProcess: { argv: string[]; env: NodeJS.ProcessEnv; platform: string } = { argv, env: {}, platform };
   modules["./managed-headless.js"] = evaluate(managedHeadlessCode, modules, { process: entryProcess });
   try {
     const entry = evaluate(entryCode, modules, { process: entryProcess }) as { main: () => Promise<void> };
@@ -143,6 +154,10 @@ describe.each(["darwin", "win32"] as const)("%s packaged update entry", platform
     expect(trace).toContain("exit:0");
     expect(trace).not.toContain("wait-armed");
     expect(trace).not.toContain("select");
+  });
+  it("puts the launched bundle's updater opt-out in the environment before payload selection", async () => {
+    expect((await scenario(platform, "stable", "visible", { updateEnabled: false })).trace).toContain("updater:0");
+    expect((await scenario(platform, "stable", "visible")).trace).toContain("updater:unset");
   });
   it("fails closed when the old process survives timeout and force-stop", async () => {
     const { trace } = await scenario(platform, "stable", "timeout");

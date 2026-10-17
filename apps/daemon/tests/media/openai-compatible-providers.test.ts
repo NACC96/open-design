@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -93,6 +93,24 @@ describe('OpenAI-compatible media providers', () => {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, JSON.stringify(data), 'utf8');
   }
+
+  it('keeps six-reference OpenAI requests outside the Codex-specific limit', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const projectDir = path.join(projectsRoot, 'project-1');
+    await mkdir(projectDir, { recursive: true });
+    const images = Array.from({ length: 6 }, (_, i) => `ref-${i}.png`);
+    await Promise.all(images.map(name => writeFile(path.join(projectDir, name), Buffer.from(PNG_BASE64, 'base64'))));
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-image-2' });
+      return new Response(JSON.stringify({ data: [{ b64_json: PNG_BASE64 }] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await generateMedia({projectRoot, projectsRoot, projectId: 'project-1', surface: 'image', model: 'gpt-image-2', images});
+    expect(result.providerId).toBe('openai');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 
   it('renders custom /v1/images/generations providers with configured base URL and model', async () => {
     await writeConfig({
@@ -567,6 +585,36 @@ describe('OpenAI-compatible media providers', () => {
     expect(result.providerId).toBe('openai');
     expect(result.providerNote).toContain('openai/custom-gpt-image-2-deployment');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps keyless OpenAI gpt-image-2 on the OpenAI route and names the Codex model instead', async () => {
+    // No implicit reroute: gpt-image-2 (OpenAI) and codex-gpt-image-2 (Codex
+    // Subscription) are two explicit models. A signed-in Codex login must not
+    // silently move an OpenAI request onto the subscription.
+    const homeDir = path.join(root, 'home');
+    await mkdir(path.join(homeDir, '.codex'), { recursive: true });
+    await writeFile(
+      path.join(homeDir, '.codex', 'auth.json'),
+      JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null }),
+      'utf8',
+    );
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(generateMedia({
+        projectRoot,
+        projectsRoot,
+        projectId: 'project-1',
+        surface: 'image',
+        model: 'gpt-image-2',
+        prompt: 'A product render on white seamless paper',
+        output: 'keyless-openai.png',
+      })).rejects.toThrow(/no OpenAI credential.*codex-gpt-image-2/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      homedirSpy.mockRestore();
+    }
   });
 
 });

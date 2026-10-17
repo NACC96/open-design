@@ -1,20 +1,41 @@
 import { agentCapabilities } from '../capabilities.js';
 import { DEFAULT_MODEL_OPTION } from './shared.js';
 import { loadMmdRouteModels } from '../mmd-routes.js';
-import type { RuntimeAgentDef } from '../types.js';
+import type { RuntimeAgentDef, RuntimeModelOption } from '../types.js';
 
-const CLAUDE_FALLBACK_MODELS = [
-  DEFAULT_MODEL_OPTION,
-  { id: 'sonnet', label: 'Sonnet (alias)' },
-  { id: 'opus', label: 'Opus (alias)' },
-  { id: 'haiku', label: 'Haiku (alias)' },
-  { id: 'fable', label: 'Fable (alias)' },
-  { id: 'claude-opus-5', label: 'claude-opus-5' },
-  { id: 'claude-sonnet-5', label: 'claude-sonnet-5' },
-  { id: 'claude-fable-5', label: 'claude-fable-5' },
-  { id: 'claude-opus-4-5', label: 'claude-opus-4-5' },
-  { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5' },
-  { id: 'claude-haiku-4-5', label: 'claude-haiku-4-5' },
+// Claude owns alias resolution and account/provider availability. Pinned IDs
+// make the version explicit; aliases remain available for CLI-managed routing.
+// Effort support: https://code.claude.com/docs/en/model-config#adjust-effort-level
+const CLAUDE_EFFORT_OPTIONS: RuntimeModelOption[] = [
+  { id: 'default', label: 'CLI default', default: true },
+  { id: 'low', label: 'Low' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'high', label: 'High' },
+  { id: 'xhigh', label: 'Extra high' },
+  { id: 'max', label: 'Max' },
+];
+const CLAUDE_46_EFFORT_OPTIONS = CLAUDE_EFFORT_OPTIONS.filter((option) => option.id !== 'xhigh');
+
+const CLAUDE_FALLBACK_MODELS: RuntimeModelOption[] = [
+  { ...DEFAULT_MODEL_OPTION, reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-fable-5-1', label: 'Fable 5.1', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'haiku', label: 'Haiku (CLI alias)', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'sonnet', label: 'Sonnet (CLI alias)', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'opus', label: 'Opus (CLI alias)', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'fable', label: 'Fable (CLI alias)', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-opus-5', label: 'Opus 5', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-fable-5', label: 'Fable 5', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-opus-4-7', label: 'Opus 4.7', reasoningOptions: CLAUDE_EFFORT_OPTIONS },
+  { id: 'claude-opus-4-6', label: 'Opus 4.6', reasoningOptions: CLAUDE_46_EFFORT_OPTIONS },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', reasoningOptions: CLAUDE_46_EFFORT_OPTIONS },
+  { id: 'claude-opus-4-5', label: 'Opus 4.5', reasoningOptions: [] },
+  { id: 'claude-sonnet-4-5', label: 'Sonnet 4.5', reasoningOptions: [] },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', reasoningOptions: [] },
 ];
 
 export const claudeAgentDef = {
@@ -42,6 +63,7 @@ export const claudeAgentDef = {
       '--forward-subagent-text': 'forwardSubagentText',
       '--agents': 'customAgents',
       '--add-dir': 'addDir',
+      '--effort': 'effort',
     },
     // `--thinking-display` is a real option but it is hidden from both
     // `claude --help` and `claude -p --help`, so the capabilityFlags scan
@@ -57,6 +79,16 @@ export const claudeAgentDef = {
     // picker, then keep the built-in aliases as fallback hints.
     fallbackModels: CLAUDE_FALLBACK_MODELS,
     fetchModels: async (_resolvedBin, env) => loadMmdRouteModels(env, CLAUDE_FALLBACK_MODELS),
+    // Agent-level effort list for runs that carry no model (`model: null`
+    // keeps Claude Code's own configured model) and for custom or proxy model
+    // ids the catalog does not know. Claude Code clamps an effort a model
+    // cannot use. Legacy models that never accepted `--effort` keep their
+    // explicit empty per-model list, which takes precedence over this one.
+    reasoningOptions: CLAUDE_EFFORT_OPTIONS,
+    // `--effort` only exists in newer Claude Code builds. The chat run
+    // confirms this capability (re-probing `--help` once when the cached
+    // answer is missing) before it forwards a non-default effort.
+    reasoningCapability: 'effort',
     // Prompt delivered via stdin to avoid both Linux `spawn E2BIG`
     // (MAX_ARG_STRLEN caps a single argv entry at ~128 KB) and Windows
     // `spawn ENAMETOOLONG` (CreateProcess caps the full command line at
@@ -99,6 +131,20 @@ export const claudeAgentDef = {
       }
       if (options.model && options.model !== 'default') {
         args.push('--model', options.model);
+      }
+      if (options.reasoning && options.reasoning !== 'default') {
+        if (!CLAUDE_EFFORT_OPTIONS.some((option) => option.id === options.reasoning)) {
+          throw new TypeError('Unsupported Claude reasoning effort.');
+        }
+        // Same rule as the other optional flags above: only forward what the
+        // installed build positively advertised. An older CLI rejects an
+        // unknown option and kills the run, so an unknown answer (a `--help`
+        // probe that timed out or failed) omits the flag too. The chat run
+        // re-probes before this point and reports any omission as a
+        // `reasoning_effort_omitted` diagnostic.
+        if (caps.effort === true) {
+          args.push('--effort', options.reasoning);
+        }
       }
       const nativeBindings = runtimeContext.nativeBuildPackageBindings ?? [];
       if (nativeBindings.length > 0) {

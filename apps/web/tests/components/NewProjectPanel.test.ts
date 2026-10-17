@@ -4,10 +4,17 @@ import { supportedModels } from '../../src/components/NewProjectPanel';
 import { AUDIO_MODELS_BY_KIND, IMAGE_MODELS, VIDEO_MODELS } from '../../src/media/models';
 
 describe('NewProjectPanel image provider visibility', () => {
-  it('shows Vela image models without exposing Codex image models', () => {
+  it('shows the Codex Subscription image model and no OpenDesign Cloud models', () => {
     const imageModels = supportedModels('image', IMAGE_MODELS);
-    expect(imageModels.some((model) => model.provider === 'vela')).toBe(true);
-    expect(imageModels.map((model) => String(model.provider))).not.toContain('codex');
+    expect(imageModels.some((model) => model.id === 'codex-gpt-image-2')).toBe(true);
+    expect(imageModels.map((model) => String(model.provider))).not.toContain('vela');
+    expect(imageModels.some((model) => model.id.startsWith('vela/'))).toBe(false);
+  });
+
+  it('keeps the HyperFrames video surface and no Cloud video model', () => {
+    const videoModels = supportedModels('video', VIDEO_MODELS);
+    expect(videoModels.some((model) => model.provider === 'hyperframes')).toBe(true);
+    expect(videoModels.map((model) => String(model.provider))).not.toContain('vela');
   });
 
   it('shows Nano Banana in supported image models', () => {

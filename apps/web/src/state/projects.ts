@@ -24,6 +24,8 @@ import type {
   CreateDesignSystemProjectFromProjectResponse,
   CreateProjectExampleReference,
   DuplicateProjectResponse,
+  ForkProjectRequest,
+  ForkProjectResponse,
   CreatePluginShareProjectResponse,
   CreateTerminalRequest,
   ImportFolderRequest,
@@ -60,6 +62,7 @@ import type {
   Conversation,
   OpenTabsState,
   Project,
+  ProjectExecutionChoice,
   ProjectMetadata,
   ProjectTemplate,
 } from '../types';
@@ -764,6 +767,12 @@ export async function createProject(
      * the local catalogue. Never accompanies `pluginId`/`appliedPluginSnapshotId`.
      */
     exampleReference?: CreateProjectExampleReference;
+    /**
+     * Agent + model the project runs with. Omitted → unstamped (follows the
+     * app-config default at run time). The Home composer passes its live pick
+     * so the stamp never races the fire-and-forget app-config sync.
+     */
+    execution?: ProjectExecutionChoice | null;
     workspaceContext?: WorkspaceCollabContext | null;
   },
   retryOptions: CreateProjectRetryOptions = {},
@@ -869,6 +878,31 @@ export async function createDesignSystemProjectFromProject(
   } catch (err) {
     throw err instanceof Error ? err : new Error('Could not create design system');
   }
+}
+
+export class ProjectForkRequestError extends Error {
+  constructor(public readonly code: string, public readonly attachmentName?: string) {
+    super(code);
+  }
+}
+
+export async function forkProject(
+  projectId: string,
+  input: ForkProjectRequest,
+  workspaceContext?: WorkspaceCollabContext | null,
+): Promise<ForkProjectResponse> {
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(workspaceContext ? workspaceProjectHeaders(workspaceContext) : {}) },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ProjectForkRequestError(body.error?.code ?? 'FORK_FAILED', body.error?.details?.attachmentName);
+  }
+  const created = await response.json() as ForkProjectResponse;
+  markProjectCreatedByViewer(created.project.id, workspaceContext ?? null);
+  return created;
 }
 
 export async function duplicateProject(
@@ -1086,9 +1120,11 @@ export async function deleteTemplate(id: string): Promise<boolean> {
   }
 }
 
-type ProjectPatch = Omit<Partial<Project>, 'pendingPrompt' | 'customInstructions'> & {
+type ProjectPatch = Omit<Partial<Project>, 'pendingPrompt' | 'customInstructions' | 'execution'> & {
   pendingPrompt?: Project['pendingPrompt'] | null;
   customInstructions?: string | null;
+  /** `null` clears the stamp so the project follows the app-config default. */
+  execution?: ProjectExecutionChoice | null;
 };
 
 export async function patchProject(

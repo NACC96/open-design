@@ -1714,11 +1714,11 @@
   right: auto;
   z-index: 1503;
   /* Compact home-hero variant: narrower + tighter than the shared 320px popover
-     since it only lists agents (no mode segment / model row). 220px is the
-     tightest width that still fits the widest row — 16px logo + 8px gap +
-     model name + 8px gap + the "unlimited" campaign badge — without the name
-     ellipsing. */
-  width: 220px;
+     (no mode segment). 260px fits two installed-CLI tabs per row (AgentTabs)
+     without ellipsing a name like "Claude Code", and still clears the widest
+     model row — 16px logo + 8px gap + model name + 8px gap + the "unlimited"
+     campaign badge. */
+  width: 260px;
   padding: var(--spacing-10);
   gap: var(--spacing-8);
 }

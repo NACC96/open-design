@@ -75,8 +75,10 @@ export type Route =
 export function parseRoute(pathname: string): Route {
   const parts = pathname.replace(/\/+$/, '').split('/').filter(Boolean);
   if (parts.length === 0) return { kind: 'home', view: 'home' };
-  if (parts[0] === 'onboarding') {
-    return { kind: 'home', view: 'onboarding' };
+  // Fork (Local AI only): there is no first-run onboarding. `/onboarding`
+  // (old bookmarks, a stale workspace tab) lands on Home.
+  if (['onboarding', 'collab-demo', 'all-projects', 'members', 'board', 'workspace-settings'].includes(parts[0]!)) {
+    return { kind: 'home', view: 'home' };
   }
   if (parts[0] === 'projects') {
     if (parts[1]) {
@@ -137,9 +139,6 @@ export function parseRoute(pathname: string): Route {
   if (parts[0] === 'settings') {
     return { kind: 'home', view: 'settings' };
   }
-  if (parts[0] === 'collab-demo') {
-    return { kind: 'collab-demo', projectId: parts[1] ? decodeURIComponent(parts[1]) : null };
-  }
   if (parts[0] === 'community') {
     // Community is now a rail destination inside the entry shell so the nav rail
     // stays visible alongside the gallery.
@@ -147,18 +146,6 @@ export function parseRoute(pathname: string): Route {
   }
   if (parts[0] === 'drafts' && !parts[1]) {
     return { kind: 'home', view: 'drafts' };
-  }
-  if (parts[0] === 'all-projects' && !parts[1]) {
-    return { kind: 'home', view: 'all-projects' };
-  }
-  if (parts[0] === 'members' && !parts[1]) {
-    return { kind: 'home', view: 'members' };
-  }
-  if (parts[0] === 'board' && !parts[1]) {
-    return { kind: 'home', view: 'board' };
-  }
-  if (parts[0] === 'workspace-settings' && !parts[1]) {
-    return { kind: 'home', view: 'workspace-settings' };
   }
   // Phase 2B / spec §11.6 — marketplace deep UI routes. Two paths:
   //   /marketplace            → catalog grid (MarketplaceView)
@@ -176,7 +163,7 @@ export function parseRoute(pathname: string): Route {
 
 export function buildPath(route: Route): string {
   if (route.kind === 'home') {
-    if (route.view === 'onboarding') return '/onboarding';
+    if (['onboarding', 'all-projects', 'members', 'board', 'workspace-settings'].includes(route.view)) return '/';
     if (route.view === 'projects') return '/projects';
     if (route.view === 'tasks') return '/automations';
     if (route.view === 'plugins') return '/plugins';
@@ -188,17 +175,13 @@ export function buildPath(route: Route): string {
     if (route.view === 'integrations') return '/integrations';
     if (route.view === 'community') return '/community';
     if (route.view === 'drafts') return '/drafts';
-    if (route.view === 'all-projects') return '/all-projects';
-    if (route.view === 'members') return '/members';
-    if (route.view === 'board') return '/board';
-    if (route.view === 'workspace-settings') return '/workspace-settings';
     if (route.view === 'settings') return '/settings';
     return '/';
   }
   if (route.kind === 'marketplace') return '/marketplace';
   if (route.kind === 'marketplace-detail') return `/marketplace/${encodeURIComponent(route.pluginId)}`;
   if (route.kind === 'collab-demo') {
-    return route.projectId ? `/collab-demo/${encodeURIComponent(route.projectId)}` : '/collab-demo';
+    return '/';
   }
   if (route.kind === 'community') return '/community';
   if (route.kind === 'design-system-create') return '/design-systems/create';

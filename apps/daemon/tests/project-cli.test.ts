@@ -71,6 +71,11 @@ async function startProjectStubServer(): Promise<StubServer> {
         }));
         return;
       }
+      if (captured.method === 'POST' && captured.url === '/api/projects/source-project/fork') {
+        res.statusCode = 201;
+        res.end(JSON.stringify({ project: { id: 'fork-1', name: 'New brief' }, conversationId: 'fork-chat', copiedFiles: ['logo.png'] }));
+        return;
+      }
       if (captured.method === 'GET' && captured.url === '/api/projects/project-1') {
         res.statusCode = 200;
         res.end(JSON.stringify({
@@ -174,6 +179,53 @@ async function startProjectStubServer(): Promise<StubServer> {
             { id: 'bound-project-1', name: 'Bound Project One', skillId: 'skill-1' },
             { id: 'bound-project-2', name: 'Bound Project Two', skillId: 'skill-2' },
           ],
+        }));
+        return;
+      }
+      // Project execution stamp (`od project create --agent`, `set-agent`,
+      // and the `od run start` fallback warning).
+      if (captured.method === 'POST' && captured.url === '/api/projects') {
+        const body = JSON.parse(captured.body || '{}');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          project: {
+            id: body.id,
+            name: body.name,
+            execution: body.execution ?? undefined,
+          },
+          conversationId: 'conversation-created',
+        }));
+        return;
+      }
+      if (captured.method === 'GET' && captured.url === '/api/projects/stamped-project') {
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          project: { id: 'stamped-project', name: 'Stamped', execution: { agentId: 'codex', model: 'gpt-5-codex' } },
+        }));
+        return;
+      }
+      if (captured.method === 'GET' && captured.url === '/api/projects/unstamped-project') {
+        res.statusCode = 200;
+        res.end(JSON.stringify({ project: { id: 'unstamped-project', name: 'Unstamped' } }));
+        return;
+      }
+      if (
+        captured.method === 'PATCH'
+        && (captured.url === '/api/projects/stamped-project' || captured.url === '/api/projects/unstamped-project')
+      ) {
+        const body = JSON.parse(captured.body || '{}');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          project: { id: captured.url.split('/').pop(), execution: body.execution ?? undefined },
+        }));
+        return;
+      }
+      if (captured.method === 'POST' && captured.url === '/api/runs') {
+        res.statusCode = 202;
+        res.end(JSON.stringify({
+          runId: 'run-1',
+          conversationId: 'conversation-1',
+          agentResolution: { agentId: 'claude', source: 'app-config', projectAgentId: 'codex' },
         }));
         return;
       }
@@ -336,6 +388,36 @@ describe('od project CLI', () => {
     });
   });
 
+  it('forks a saved brief with workspace headers, a prompt file, and JSON output', async () => {
+    stub = await startProjectStubServer();
+    tempRoot = mkdtempSync(join(tmpdir(), 'od-project-fork-cli-'));
+    const promptPath = join(tempRoot, 'brief.md');
+    writeFileSync(promptPath, 'New direction.\nKeep the logo.\n');
+    const result = await runCli([
+      'project', 'fork', 'source-project', '--conversation', 'source-chat', '--message', 'brief',
+      '--name', 'New brief', '--prompt-file', promptPath, '--workspace', 'ws-1', '--workspace-member', 'member-1',
+      '--json', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toMatchObject({ project: { id: 'fork-1' }, conversationId: 'fork-chat' });
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toMatchObject({ method: 'POST', url: '/api/projects/source-project/fork', headers: {
+      'x-od-workspace-id': 'ws-1', 'x-od-workspace-member-id': 'member-1',
+    } });
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({
+      sourceConversationId: 'source-chat', sourceMessageId: 'brief', name: 'New brief', prompt: 'New direction.\nKeep the logo.\n',
+    });
+  });
+
+  it('omits a fork prompt override when none was supplied', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'fork', 'source-project', '--conversation', 'source-chat', '--message', 'brief', '--daemon-url', stub.baseUrl]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain('draft ready to edit');
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({ sourceConversationId: 'source-chat', sourceMessageId: 'brief' });
+  });
+
   it('duplicates a project and prints the human-readable result', async () => {
     stub = await startProjectStubServer();
 
@@ -362,41 +444,135 @@ describe('od project CLI', () => {
     expect(JSON.parse(stub.requests[0]!.body)).toEqual({ name: 'Duplicate Copy' });
   });
 
-  it('lists workspace projects through the workspace-scoped API', async () => {
+  it('creates a project on an explicit agent and model', async () => {
     stub = await startProjectStubServer();
-
     const result = await runCli([
-      'workspace',
-      'projects',
-      'list',
-      '--workspace',
-      'ws-1',
-      '--member',
-      'member-1',
-      '--role',
-      'admin',
-      '--view',
-      'team',
-      '--json',
-      '--daemon-url',
-      stub.baseUrl,
+      'project', 'create', '--name', 'Poster',
+      '--agent', 'codex', '--model', 'gpt-5-codex', '--reasoning', 'high', '--service-tier', 'priority',
+      '--json', '--daemon-url', stub.baseUrl,
     ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      projects: [{ id: 'project-1', visibility: 'team' }],
-    });
+    expect(result.code, result.stderr).toBe(0);
     expect(stub.requests).toHaveLength(1);
-    expect(stub.requests[0]).toMatchObject({
-      method: 'GET',
-      url: '/api/workspaces/ws-1/projects?view=team',
+    expect(JSON.parse(stub.requests[0]!.body).execution).toEqual({
+      agentId: 'codex', model: 'gpt-5-codex', reasoning: 'high', serviceTier: 'priority',
     });
-    expect(stub.requests[0]!.headers).toMatchObject({
-      'x-od-workspace-id': 'ws-1',
-      'x-od-workspace-member-id': 'member-1',
-      'x-od-workspace-role': 'admin',
+    expect(JSON.parse(result.stdout).project.execution).toEqual({
+      agentId: 'codex', model: 'gpt-5-codex', reasoning: 'high', serviceTier: 'priority',
     });
+  });
+
+  it('creates an unstamped project when --agent is omitted', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'create', '--name', 'Poster', '--daemon-url', stub.baseUrl]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(stub.requests[0]!.body)).not.toHaveProperty('execution');
+    expect(result.stdout).toContain('runs on the configured agent');
+  });
+
+  it('names the explicit agent in the human create output', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'create', '--name', 'Poster', '--agent', 'codex', '--model', 'gpt-5-codex',
+      '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain('runs on codex (model gpt-5-codex)');
+  });
+
+  it.each([
+    ['--model', 'gpt-5'],
+    ['--reasoning', 'high'],
+    ['--service-tier', 'priority'],
+  ])('refuses %s on create without --agent', async (flag, value) => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'create', '--name', 'Poster', flag, value, '--daemon-url', stub.baseUrl]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('need --agent');
+    expect(stub.requests).toHaveLength(0);
+  });
+
+  it('set-agent with --agent replaces the whole choice in one PATCH', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'set-agent', 'stamped-project', '--agent', 'claude', '--model', 'claude-sonnet-5-5',
+      '--json', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toMatchObject({ method: 'PATCH', url: '/api/projects/stamped-project' });
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({
+      execution: { agentId: 'claude', model: 'claude-sonnet-5-5' },
+    });
+    expect(JSON.parse(result.stdout).project.execution).toEqual({ agentId: 'claude', model: 'claude-sonnet-5-5' });
+  });
+
+  it('set-agent without --agent merges the flags into the current choice', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'set-agent', 'stamped-project', '--reasoning', 'high', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(stub.requests.map((r) => `${r.method} ${r.url}`)).toEqual([
+      'GET /api/projects/stamped-project',
+      'PATCH /api/projects/stamped-project',
+    ]);
+    expect(JSON.parse(stub.requests[1]!.body)).toEqual({
+      execution: { agentId: 'codex', model: 'gpt-5-codex', reasoning: 'high' },
+    });
+    expect(result.stdout).toBe(
+      '[project] stamped-project now runs on codex (model gpt-5-codex, reasoning high)\n',
+    );
+  });
+
+  it('set-agent --clear removes the choice', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'set-agent', 'stamped-project', '--clear', '--daemon-url', stub.baseUrl]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(stub.requests).toHaveLength(1);
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({ execution: null });
+    expect(result.stdout).toBe('[project] stamped-project now follows the configured agent\n');
+  });
+
+  it('set-agent without --agent refuses a project that has no choice yet', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'set-agent', 'unstamped-project', '--model', 'gpt-5', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('Pass --agent <id>');
+    expect(stub.requests.map((r) => `${r.method} ${r.url}`)).toEqual(['GET /api/projects/unstamped-project']);
+  });
+
+  it.each([
+    ['no flags', ['project', 'set-agent', 'stamped-project']],
+    ['--clear with --agent', ['project', 'set-agent', 'stamped-project', '--clear', '--agent', 'claude']],
+    ['no project id', ['project', 'set-agent', '--agent', 'claude']],
+  ])('set-agent rejects %s', async (_label, args) => {
+    stub = await startProjectStubServer();
+    const result = await runCli([...args, '--daemon-url', stub.baseUrl]);
+    expect(result.code).toBe(2);
+    expect(stub.requests).toHaveLength(0);
+  });
+
+  it('od run start warns on stderr when the project agent was not available', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'run', 'start', '--project', 'stamped-project', '--message', 'make a poster', '--json',
+      '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(stub.requests[0]!.body)).not.toHaveProperty('agentId');
+    expect(JSON.parse(result.stdout).agentResolution).toMatchObject({ projectAgentId: 'codex' });
+    expect(result.stderr).toContain('this project runs on codex, which is not available');
+    expect(result.stderr).toContain('the configured agent (claude)');
+  });
+
+  it('documents the project agent commands', async () => {
+    const projectHelp = await runCli(['project', 'help']);
+    const runHelp = await runCli(['run', 'help']);
+    expect(projectHelp.stdout).toContain('od project set-agent <id>');
+    expect(projectHelp.stdout).toContain('--clear');
+    expect(runHelp.stdout).toContain("--agent defaults to the project's agent");
   });
 
   it('od project list without --workspace resolves the signed-in workspace automatically (#6679)', async () => {
@@ -522,191 +698,4 @@ describe('od project CLI', () => {
     expect(catalogReq).toBeDefined();
   });
 
-  it('creates workspace invites through the workspace invite API', async () => {
-    stub = await startProjectStubServer();
-
-    const result = await runCli([
-      'workspace',
-      'invite',
-      '--email',
-      'teammate@example.com',
-      '--role',
-      'member',
-      '--workspace',
-      'ws-1',
-      '--member',
-      'member-1',
-      '--json',
-      '--daemon-url',
-      stub.baseUrl,
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toEqual({
-      results: [{ email: 'teammate@example.com', ok: true, inviteId: 'invite-1' }],
-    });
-    expect(stub.requests).toHaveLength(1);
-    expect(stub.requests[0]).toMatchObject({
-      method: 'POST',
-      url: '/api/workspace/invite',
-      body: JSON.stringify({ email: 'teammate@example.com', role: 'member' }),
-    });
-    expect(stub.requests[0]!.headers).toMatchObject({
-      'x-od-workspace-id': 'ws-1',
-      'x-od-workspace-member-id': 'member-1',
-    });
-  });
-
-  it('lists team projects through the workspace discovery API', async () => {
-    stub = await startProjectStubServer();
-
-    const result = await runCli([
-      'workspace',
-      'projects',
-      'team',
-      '--workspace',
-      'ws-1',
-      '--member',
-      'member-1',
-      '--json',
-      '--daemon-url',
-      stub.baseUrl,
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toEqual({
-      projects: [{ projectId: 'team-project-1', displayName: 'Team Project' }],
-    });
-    expect(stub.requests).toHaveLength(1);
-    expect(stub.requests[0]).toMatchObject({
-      method: 'GET',
-      url: '/api/workspace/projects/team',
-    });
-    expect(stub.requests[0]!.headers).toMatchObject({
-      'x-od-workspace-id': 'ws-1',
-      'x-od-workspace-member-id': 'member-1',
-    });
-  });
-
-  it('lists workspace members through the workspace member directory API', async () => {
-    stub = await startProjectStubServer();
-
-    const result = await runCli([
-      'workspace',
-      'members',
-      'list',
-      '--workspace',
-      'ws-1',
-      '--member',
-      'member-1',
-      '--json',
-      '--daemon-url',
-      stub.baseUrl,
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toEqual({
-      members: [{ memberId: 'member-1', displayName: 'Member One', role: 'admin' }],
-    });
-    expect(stub.requests).toHaveLength(1);
-    expect(stub.requests[0]).toMatchObject({
-      method: 'GET',
-      url: '/api/workspace/members',
-    });
-    expect(stub.requests[0]!.headers).toMatchObject({
-      'x-od-workspace-id': 'ws-1',
-      'x-od-workspace-member-id': 'member-1',
-    });
-  });
-
-  it('rejects workspace directory commands without explicit workspace identity', async () => {
-    stub = await startProjectStubServer();
-
-    const result = await runCli([
-      'workspace',
-      'members',
-      'list',
-      '--json',
-      '--daemon-url',
-      stub.baseUrl,
-    ]);
-
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('--workspace <id> and --workspace-member <id>');
-    expect(stub.requests).toHaveLength(0);
-  });
-
-  it('sends explicit CLI workspace identity to team resource routes', async () => {
-    stub = await startProjectStubServer();
-
-    const result = await runCli([
-      'collab',
-      'team-resources',
-      'skills',
-      '--workspace',
-      'ws-1',
-      '--workspace-member',
-      'member-1',
-      '--json',
-      '--daemon-url',
-      stub.baseUrl,
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toEqual({
-      ids: ['team-skill'],
-      resources: [{ id: 'team-skill' }],
-    });
-    expect(stub.requests).toHaveLength(1);
-    expect(stub.requests[0]).toMatchObject({
-      method: 'GET',
-      url: '/api/workspace/skills/team',
-    });
-    expect(stub.requests[0]!.headers).toMatchObject({
-      'x-od-workspace-id': 'ws-1',
-      'x-od-workspace-member-id': 'member-1',
-    });
-  });
-
-  it('sends repeatable project ids for workspace batch delete', async () => {
-    stub = await startProjectStubServer();
-
-    const result = await runCli([
-      'workspace',
-      'projects',
-      'batch-delete',
-      '--workspace',
-      'ws-1',
-      '--member',
-      'member-1',
-      '--role',
-      'admin',
-      '--project',
-      'project-1',
-      '--project',
-      'project-2',
-      '--json',
-      '--daemon-url',
-      stub.baseUrl,
-    ]);
-
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toEqual({ ok: true, deletedProjectIds: ['project-1', 'project-2'] });
-    expect(stub.requests).toHaveLength(1);
-    expect(stub.requests[0]).toMatchObject({
-      method: 'POST',
-      url: '/api/workspaces/ws-1/projects/batch-delete',
-      body: JSON.stringify({ projectIds: ['project-1', 'project-2'] }),
-    });
-    expect(stub.requests[0]!.headers).toMatchObject({
-      'x-od-workspace-id': 'ws-1',
-      'x-od-workspace-member-id': 'member-1',
-      'x-od-workspace-role': 'admin',
-    });
-  });
 });

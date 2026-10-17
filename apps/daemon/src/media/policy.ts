@@ -9,6 +9,7 @@ import {
   type MediaPolicyTarget,
   type MediaSurface,
 } from '@open-design/contracts';
+import { canonicalMediaModelId } from './models.js';
 
 const MEDIA_EXECUTION_MODE_SET = new Set<MediaExecutionMode>(MEDIA_EXECUTION_MODES);
 const MEDIA_SURFACE_SET = new Set<MediaSurface>(MEDIA_SURFACES);
@@ -79,11 +80,23 @@ export function parseMediaExecutionPolicyInput(value: unknown):
   return { ok: true, policy };
 }
 
+/**
+ * Policy check against canonical model ids, so a run allowed to use a legacy
+ * id (`vela/gpt-image-2`, saved before this fork removed Cloud media) may also
+ * dispatch the model it now resolves to (`codex-gpt-image-2`), and vice versa.
+ * Two ids that resolve to the same registry entry are the same model.
+ */
 export function mediaPolicyDenial(
   policy: MediaExecutionPolicy,
   target: MediaPolicyTarget,
 ): MediaPolicyDenial | null {
-  return mediaExecutionPolicyDenial(policy, target);
+  const canonicalPolicy: MediaExecutionPolicy = Array.isArray(policy.allowedModels)
+    ? { ...policy, allowedModels: policy.allowedModels.map(canonicalMediaModelId) }
+    : policy;
+  return mediaExecutionPolicyDenial(canonicalPolicy, {
+    ...target,
+    ...(target.model ? { model: canonicalMediaModelId(target.model) } : {}),
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

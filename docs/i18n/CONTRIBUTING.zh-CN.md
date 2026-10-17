@@ -1,5 +1,7 @@
 # 贡献指南 · Contributing to OpenDesign
 
+> **Fork 工作区：** `NACC96/open-design` 的工作以 [AGENTS.md → Fork-only workflow](../../AGENTS.md#fork-only-workflow) 为准。下文的上游链接与先建 issue 的流程，仅适用于用户明确要求向 `nexu-io/open-design` 贡献的情况，不是修改 fork 的前提。一般的 bug 反馈请求不代表允许向上游发布内容。
+
 谢谢你愿意参与。OD 是有意做小的 —— 大部分价值在 **文件** 里（skill、design system、提示词片段），而不是框架代码。这意味着收益最高的贡献往往就是一个文件夹、一份 Markdown，或者一个 PR 大小的 adapter。
 
 这份指南会告诉你：每种贡献该往哪里看、合并之前 PR 需要过哪些线。

@@ -1197,9 +1197,7 @@ export function WorkspaceTabsBar({
 
   // 转入团队空间 shows under the rail row menu's conditions: a team plane to
   // move into AND the right to share. A personal workspace hides the item.
-  const moveToTeamAvailable =
-    workspaceContextHasTeamIdentity(workspaceContext)
-    && workspaceContext?.permissions?.canShareProjects === true;
+  const moveToTeamAvailable = false;
   // Shared / foreign rows are decided from the same evidence the rail uses —
   // the team hub's catalog — read once per dropdown open (coalesced and cached
   // by the catalog module, so this is not a second poll) rather than through
@@ -1410,7 +1408,7 @@ export function WorkspaceTabsBar({
     setState((current) => {
       if (!current.tabs.some((tab) =>
         tab.kind === 'entry' &&
-        (tab.view === 'onboarding' || (resetDesignSystemsEntry && tab.view === 'design-systems')),
+        (['onboarding', 'all-projects', 'members', 'board', 'workspace-settings'].includes(tab.view) || (resetDesignSystemsEntry && tab.view === 'design-systems')),
       )) {
         return current;
       }
@@ -1418,7 +1416,7 @@ export function WorkspaceTabsBar({
         ...current,
         tabs: current.tabs.map((tab) =>
           tab.kind === 'entry' &&
-          (tab.view === 'onboarding' || (resetDesignSystemsEntry && tab.view === 'design-systems'))
+          (['onboarding', 'all-projects', 'members', 'board', 'workspace-settings'].includes(tab.view) || (resetDesignSystemsEntry && tab.view === 'design-systems'))
             ? { ...tab, view: 'home' }
             : tab,
         ),

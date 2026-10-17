@@ -1,3 +1,4 @@
+import { enforceLocalAiOnlyConfig } from '../state/local-ai-only';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import { Button, VisuallyHidden } from '@open-design/components';
@@ -68,7 +69,12 @@ import {
 import { ExportDiagnosticsRow } from './ExportDiagnosticsButton';
 import { Icon } from './Icon';
 import { LabsSection } from './LabsSection';
-import { defaultAgentModelId, effectiveAgentModelChoice } from './agentModelSelection';
+import {
+  agentReasoningOptions,
+  defaultAgentModelId,
+  effectiveAgentModelChoice,
+  reasoningPatchForModelChange,
+} from './agentModelSelection';
 import {
   CUSTOM_MODEL_SENTINEL,
   orderModelOptionsByAvailability,
@@ -167,7 +173,6 @@ import { DesignSystemsSection } from './DesignSystemsSection';
 import { PrivacySection } from './PrivacySection';
 import { ProjectLocationsSection } from './ProjectLocationsSection';
 import { RoutinesSection } from './RoutinesSection';
-import { SettingsWorkspaceSection } from './SettingsWorkspaceSection';
 import { ModelPriceOverridesSection } from './spend/ModelPriceOverridesSection';
 import {
   useWorkspaceBillingResponse,
@@ -178,7 +183,6 @@ import {
 import { canUpgradeFromPlanTier, resolvePlanTier } from '../collab/team-plan';
 import { planBadgeTierForWorkspace } from './PlanWordmark';
 import { workspaceUpgradeUrl } from './EntryNavRail';
-import { canShowWorkspaceSettings } from '../collab/settings-access';
 import { ConnectorsBrowser } from './ConnectorsBrowser';
 import { MemoryModelInline } from './MemoryModelInline';
 import { MemorySection } from './MemorySection';
@@ -274,6 +278,10 @@ function normalizeSettingsSection(section: SettingsSection): SettingsSection {
     case 'pet':
     case 'projectLocations':
     case 'critiqueTheater':
+      return 'general';
+    // Fork (Local AI only): there are no team workspaces, so a stale
+    // `workspace` deep link lands on General instead of an empty section.
+    case 'workspace':
       return 'general';
     default:
       return section;
@@ -1500,7 +1508,7 @@ export function switchApiProtocolConfig(
 export function SettingsDialog({
   presentation = 'modal',
   initial,
-  agents,
+  agents: detectedAgents,
   agentsLoading = false,
   daemonLive,
   appVersionInfo,
@@ -1528,6 +1536,7 @@ export function SettingsDialog({
   onProviderModelsCacheChange,
   onDraftChange,
 }: Props) {
+  const agents = useMemo(() => detectedAgents.filter(isVisibleLocalCliAgent), [detectedAgents]);
   const { t, locale, setLocale } = useI18n();
   const analytics = useAnalytics();
   // Backfill the fixed-origin base URL on mount too, so a config persisted with
@@ -1537,9 +1546,7 @@ export function SettingsDialog({
     ...initial,
     baseUrl: resolveFixedOriginBaseUrl(initial.apiProtocol ?? 'anthropic', initial.baseUrl),
   };
-  const initialFormConfig = initial.mode === 'api'
-    ? restorePendingByokProviderDraft(normalizedInitialConfig)
-    : normalizedInitialConfig;
+  const initialFormConfig = enforceLocalAiOnlyConfig(normalizedInitialConfig);
   const [cfg, setCfg] = useState<AppConfig>(() => initialFormConfig);
   const [maxTokensInput, setMaxTokensInput] = useState(
     initialFormConfig.maxTokens == null ? '' : String(initialFormConfig.maxTokens),
@@ -1660,7 +1667,6 @@ export function SettingsDialog({
     workspaceBillingResponse,
     workspaceContext,
   );
-  const showWorkspaceSettings = canShowWorkspaceSettings(workspaceContext);
   // All generic AMR upgrade buttons route through public Pricing. While the
   // workspace read is pending, hide the owner-only action to avoid a flash for
   // admins or members.
@@ -3890,7 +3896,7 @@ export function SettingsDialog({
   const sectionHeader: Record<SettingsSection, { title: string; subtitle: string }> = {
     general: { title: t('settings.general'), subtitle: t('settings.generalHint') },
     labs: { title: t('labs.title'), subtitle: t('labs.navHint') },
-    execution: { title: t('settings.title'), subtitle: t('settings.subtitle') },
+    execution: { title: t('settings.title'), subtitle: t('settings.modeDaemonHelp') },
     workspace: { title: t('settings.workspace'), subtitle: t('settings.workspaceHint') },
     instructions: {
       title: t('settings.instructionsTitle'),
@@ -3971,10 +3977,7 @@ export function SettingsDialog({
       Array.isArray(selected.models) && selected.models.length > 0;
     const configuredModelId =
       cfg.agentModels?.[selected.id]?.model ?? defaultAgentModelId(selected);
-    const modelReasoningOptions = selected.models?.find(
-      (model) => model.id === configuredModelId,
-    )?.reasoningOptions;
-    const activeReasoningOptions = modelReasoningOptions ?? selected.reasoningOptions;
+    const activeReasoningOptions = agentReasoningOptions(selected, configuredModelId);
     const hasReasoning =
       Array.isArray(activeReasoningOptions) &&
       activeReasoningOptions.length > 0;
@@ -4044,11 +4047,12 @@ export function SettingsDialog({
       setCfg((c) => {
         const prev = c.agentModels?.[selected.id] ?? {};
         const merged = { ...prev, ...next };
-        if (
-          Object.prototype.hasOwnProperty.call(next, 'serviceTier') &&
-          next.serviceTier === undefined
-        ) {
-          delete merged.serviceTier;
+        // An own `undefined` clears the saved value (see
+        // `mergeAgentModelChoice`); an absent key keeps it.
+        for (const key of ['reasoning', 'serviceTier'] as const) {
+          if (Object.prototype.hasOwnProperty.call(next, key) && next[key] === undefined) {
+            delete merged[key];
+          }
         }
         return {
           ...c,
@@ -4125,7 +4129,11 @@ export function SettingsDialog({
                         next.add(selected.id);
                         return next;
                       });
-                      setChoice({ model: '', serviceTier: undefined });
+                      setChoice({
+                        model: '',
+                        serviceTier: undefined,
+                        ...reasoningPatchForModelChange(selected, '', choice.reasoning),
+                      });
                     } else {
                       setAgentCustomModelIds((prev) => {
                         if (!prev.has(selected.id)) return prev;
@@ -4143,6 +4151,11 @@ export function SettingsDialog({
                         )
                           ? choice.serviceTier
                           : undefined,
+                        ...reasoningPatchForModelChange(
+                          selected,
+                          nextValue,
+                          choice.reasoning,
+                        ),
                       });
                     }
                   }}
@@ -4192,9 +4205,14 @@ export function SettingsDialog({
               type="text"
               value={modelValue}
               placeholder={t('settings.modelCustomPlaceholder')}
-              onChange={(e) =>
-                setChoice({ model: e.target.value.trim(), serviceTier: undefined })
-              }
+              onChange={(e) => {
+                const nextModel = e.target.value.trim();
+                setChoice({
+                  model: nextModel,
+                  serviceTier: undefined,
+                  ...reasoningPatchForModelChange(selected, nextModel, choice.reasoning),
+                });
+              }}
             />
           </label>
         ) : null}
@@ -4368,7 +4386,7 @@ export function SettingsDialog({
               <Icon name="sliders" size={18} />
               <span>
                 <strong>{t('settings.envConfigure')}</strong>
-                <small>{`${t('settings.localCli')} / ${t('settings.modeApiMeta')}`}</small>
+                <small>{t('settings.localCli')}</small>
               </span>
             </button>
             <button
@@ -4473,7 +4491,7 @@ export function SettingsDialog({
                 className="seg-control"
                 role="tablist"
                 aria-label={t('settings.modeAria')}
-                style={{ ['--seg-cols' as string]: 2 } as CSSProperties}
+                style={{ ['--seg-cols' as string]: 1 } as CSSProperties}
               >
                 <button
                   type="button"
@@ -4498,105 +4516,13 @@ export function SettingsDialog({
                       : t('settings.modeDaemonOfflineMeta')}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={cfg.mode === 'api'}
-                  className={
-                    'seg-btn seg-btn--inline' +
-                    (cfg.mode === 'api' ? ' active' : '')
-                  }
-                  onClick={() => setMode('api')}
-                >
-                  <span className="seg-title">{t('settings.modeApiMeta')}</span>
-                  <span className="seg-meta">{t('settings.modeApi')}</span>
-                </button>
+                {/* Fork (Local AI only): no API-key (BYOK) mode tab. */}
               </div>
               </div>
-              {cfg.mode === 'daemon' && !amrCardSignedIn ? (
-                // Only prompt to sign into OpenDesign Cloud when NOT already
-                // signed in — the AMR/vela session IS the cloud identity (one
-                // session drives both), so a logged-in user has nothing to do
-                // here and the callout was showing spuriously.
-                <div className="settings-cloud-signin-callout">
-                  <div>
-                    <strong>{t('settings.cloudCalloutTitle')}</strong>
-                    <p>{t('settings.cloudCalloutBody')}</p>
-                  </div>
-                  {/* Same device-auth flow as the 授权 button on the OpenDesign
-                      agent card below — the AMR/vela session IS the cloud
-                      identity, so signing in here is that one flow. This used to
-                      navigate to onboarding, which walked the user through the
-                      whole first-run tour to reach the same authorization. */}
-                  <AmrLoginPill
-                    className="settings-cloud-signin-callout__button"
-                    hideSignedOutStatus
-                    hideSignedInStatus
-                    initialStatus={amrCardStatus}
-                    skipInitialRefresh
-                    signInLabel={t('settings.cloudCalloutButton')}
-                    signInIcon="log-in"
-                    amrEntrySourceDetail="settings_cloud_callout"
-                    metricsConsent={cfg.telemetry?.metrics === true}
-                    installationId={cfg.installationId}
-                    onStatusChange={setAmrCardStatus}
-                    onSignedOut={onAmrSignedOut}
-                  />
-                </div>
-              ) : null}
-              {cfg.mode === 'api' ? (
-                <div
-                  className="protocol-chips protocol-chips--providers"
-                  role="tablist"
-                  aria-label={t('settings.protocolAria')}
-                >
-                  <div className="protocol-chip-group protocol-chip-group--providers">
-                    <div className="protocol-chip-group-options">
-                      {byokProviderOptions.map((provider) => {
-                        const active = selectedByokProvider?.id === provider.id;
-                        const configured = byokProviderConfigured(provider);
-                        const statusLabel = configured
-                          ? t('settings.mediaProviderConfigured')
-                          : t('settings.mediaProviderUnset');
-                        return (
-                          <button
-                            key={provider.id}
-                            type="button"
-                            role="tab"
-                            aria-selected={active}
-                            aria-label={provider.title}
-                            className={'protocol-chip protocol-chip--provider' + (active ? ' active' : '')}
-                            title={`${provider.title} - ${statusLabel}`}
-                            onClick={() => {
-                              const byokProviderId = byokProtocolToTracking(provider.protocol);
-                              if (byokProviderId) {
-                                trackSettingsByokProviderOptionClick(analytics.track, {
-                                  page_name: 'settings',
-                                  area: 'configure_execution_mode_byok',
-                                  element: 'byok_provider_option',
-                                  action: 'select_byok_provider',
-                                  provider_id: byokProviderId,
-                                  is_selected: active,
-                                });
-                              }
-                              if (!active) {
-                                setByokProvider(provider);
-                              }
-                            }}
-                          >
-                            <span
-                              className={`protocol-chip-status${configured ? ' is-configured' : ' is-unset'}`}
-                              aria-hidden
-                            />
-                            <span>{provider.title}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-          {cfg.mode === 'daemon' ? (
+          {/* Fork (Local AI only): no Open Design Cloud sign-in callout, no
+              API-key provider picker and no API-key form — the execution
+              section is the Local CLI list only. */}
+          {(
             <section className="settings-section">
               <div className="section-head">
                 <div>
@@ -4694,9 +4620,7 @@ export function SettingsDialog({
                             t('settings.amrBenefitManyModels'),
                           ];
                           const versionLabel =
-                            isAmrAgent
-                              ? ''
-                              : cleanAgentVersionLabel(a.name, a.version);
+                            cleanAgentVersionLabel(a.name, a.version);
                           const metaLabel =
                             a.authStatus === 'missing'
                               ? t('settings.agentAuthRequired')
@@ -4821,7 +4745,7 @@ export function SettingsDialog({
                           const cardEl = (
                             <div
                               key={a.id}
-                              ref={isAmrAgent ? amrCardRef : undefined}
+                              ref={undefined}
                               data-testid={`settings-agent-card-${a.id}`}
                               className={
                                 'agent-card agent-card-installed' +
@@ -4875,29 +4799,13 @@ export function SettingsDialog({
                                       <div
                                         className={
                                           'agent-card-name' +
-                                          (isAmrAgent
-                                            ? ' agent-card-name--amr'
-                                            : '')
+                                          ('')
                                         }
                                       >
                                         <span className="agent-card-title">
                                           {agentName}
                                         </span>
-                                        {isAmrAgent ? (
-                                          <span
-                                            className="agent-card-benefits"
-                                            aria-hidden="true"
-                                          >
-                                            {amrBenefits.map((benefit) => (
-                                              <span
-                                                key={benefit}
-                                                className="agent-card-benefit"
-                                              >
-                                                {benefit}
-                                              </span>
-                                            ))}
-                                          </span>
-                                        ) : description ? (
+                                        {description ? (
                                           <>
                                             <span
                                               className="agent-card-name-divider"
@@ -4980,89 +4888,7 @@ export function SettingsDialog({
                                       ) : null}
                                   </div>
                                 </button>
-                                {isAmrAgent ? (
-                                  active && amrCardStatusReady ? (
-                                    <span
-                                      className="amr-auth-anchor"
-                                      onMouseEnter={() => setAmrCoachmarkDismissed(true)}
-                                    >
-                                      {amrCoachmarkArmed &&
-                                      !amrCardSignedIn &&
-                                      !amrCoachmarkDismissed ? (
-                                        <span className="amr-coachmark" aria-hidden="true">
-                                          <span className="amr-coachmark__ring" />
-                                          <svg
-                                            className="amr-coachmark__cursor"
-                                            width="22"
-                                            height="22"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                          >
-                                            <path
-                                              d="M9.4 13V8a1.8 1.8 0 0 1 3.6 0v4.6c.35-.55 1-.95 1.75-.95.65 0 1.25.32 1.6.85.32-.5.9-.8 1.55-.8.8 0 1.5.5 1.78 1.2.35-.3.8-.5 1.3-.5 1.1 0 2 .9 2 2v3.05a5.6 5.6 0 0 1-5.6 5.6h-2.5a5 5 0 0 1-3.75-1.7l-4.2-4.75a1.85 1.85 0 0 1 2.65-2.6L9.4 16Z"
-                                              fill="#fff"
-                                              stroke="#1a1a1a"
-                                              strokeWidth="1.1"
-                                              strokeLinejoin="round"
-                                            />
-                                          </svg>
-                                        </span>
-                                      ) : null}
-                                      {amrCardCanUpgrade ? (
-                                        <button
-                                          type="button"
-                                          className="agent-card-amr-upgrade"
-                                          data-testid="settings-agent-card-amr-upgrade"
-                                          onClick={() => {
-                                            const upgradeUrl = amrUpgradeUrl(
-                                              amrCardStatus?.profile,
-                                            );
-                                            if (!upgradeUrl) return;
-                                            void openExternalUrl(
-                                              attributedAmrSettingsUrl(
-                                                upgradeUrl,
-                                                'settings_amr_upgrade',
-                                              ),
-                                            );
-                                          }}
-                                        >
-                                          <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            viewBox="0 0 24 24"
-                                            fill="currentColor"
-                                            width={14}
-                                            height={14}
-                                            aria-hidden
-                                          >
-                                            <path d="M10.6144 17.7956 11.492 15.7854C12.2731 13.9966 13.6789 12.5726 15.4325 11.7942L17.8482 10.7219C18.6162 10.381 18.6162 9.26368 17.8482 8.92277L15.5079 7.88394C13.7092 7.08552 12.2782 5.60881 11.5105 3.75894L10.6215 1.61673C10.2916.821765 9.19319.821767 8.8633 1.61673L7.97427 3.75892C7.20657 5.60881 5.77553 7.08552 3.97685 7.88394L1.63658 8.92277C.868537 9.26368.868536 10.381 1.63658 10.7219L4.0523 11.7942C5.80589 12.5726 7.21171 13.9966 7.99275 15.7854L8.8704 17.7956C9.20776 18.5682 10.277 18.5682 10.6144 17.7956ZM19.4014 22.6899 19.6482 22.1242C20.0882 21.1156 20.8807 20.3125 21.8695 19.8732L22.6299 19.5353C23.0412 19.3526 23.0412 18.7549 22.6299 18.5722L21.9121 18.2532C20.8978 17.8026 20.0911 16.9698 19.6586 15.9269L19.4052 15.3156C19.2285 14.8896 18.6395 14.8896 18.4628 15.3156L18.2094 15.9269C17.777 16.9698 16.9703 17.8026 15.956 18.2532L15.2381 18.5722C14.8269 18.7549 14.8269 19.3526 15.2381 19.5353L15.9985 19.8732C16.9874 20.3125 17.7798 21.1156 18.2198 22.1242L18.4667 22.6899C18.6473 23.104 19.2207 23.104 19.4014 22.6899Z" />
-                                          </svg>
-                                          {t('settings.amrUpgrade')}
-                                        </button>
-                                      ) : null}
-                                      <AmrLoginPill
-                                        className="agent-card-amr-auth"
-                                        hideSignedOutStatus
-                                        hideSignedInStatus
-                                        initialStatus={amrCardStatus}
-                                        skipInitialRefresh
-                                        signInLabel={t('settings.amrAuthorize')}
-                                        showConsoleAction={amrCardSignedIn}
-                                        iconOnlySignOut
-                                        amrEntrySourceDetail="settings_amr_authorize"
-                                        metricsConsent={cfg.telemetry?.metrics === true}
-                                        installationId={cfg.installationId}
-                                        revealPendingCancelAction={amrRevealPendingCancelAction}
-                                        onStatusChange={setAmrCardStatus}
-                                        onSignedOut={onAmrSignedOut}
-                                      />
-                                    </span>
-                                  ) : (
-                                    <div
-                                      className="agent-card-amr-auth agent-card-amr-auth--placeholder"
-                                      aria-hidden="true"
-                                    />
-                                  )
-                                ) : null}
+                                {null}
                                 {active && !isAmrAgent ? (
                                   <button
                                     type="button"
@@ -5458,416 +5284,6 @@ export function SettingsDialog({
                 );
               })()}
             </section>
-          ) : (
-            /*
-              BYOK panel — wrap the per-protocol form in a bordered card so
-              the chips above (Anthropic / OpenAI / Azure / Gemini / Ollama)
-              visually own the content below. Without the card, the chip
-              row and the form looked like two unrelated stripes; users
-              had no anchor for "this is what I configured for the active
-              tab", and switching tabs felt like the whole right column
-              just reshuffled. The card lives on the same white-with-soft-
-              border pattern as `.agent-model-row` so the two BYOK / CLI
-              panels feel like the same family.
-            */
-            <section className="settings-section settings-section-card settings-section-byok">
-              <div className="section-head">
-                <div>
-                  <div className="settings-byok-title">
-                    <h3>{API_PROTOCOL_LABELS[apiProtocol]}</h3>
-                    <span className="settings-byok-info-wrap">
-                      <button
-                        type="button"
-                        className="settings-byok-info-button"
-                        aria-label={t('settings.byokNoFileToolsNotice')}
-                        aria-describedby="settings-byok-no-file-tools-tooltip"
-                        data-testid="settings-byok-no-file-tools-trigger"
-                      >
-                        <Icon name="info" size={13} />
-                      </button>
-                      <span
-                        id="settings-byok-no-file-tools-tooltip"
-                        className="settings-byok-info-tooltip"
-                        role="tooltip"
-                        data-testid="settings-byok-no-file-tools-notice"
-                      >
-                        {t('settings.byokNoFileToolsNotice')}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-                <ByokConnectionTestControl
-                  baseUrlValid={baseUrlValid}
-                  canRunConnectionTest={
-                    !byokFirstPartyBaseUrl?.hostTypo &&
-                    canRunProviderConnectionTest(cfg, {
-                      requiresApiKey: byokRequiresApiKey,
-                    })
-                  }
-                  labels={{
-                    readyToTest: t('settings.byokReadyToTest'),
-                    test: t('settings.test'),
-                    testRetry: t('settings.testRetry'),
-                    testRunning: t('settings.testRunning'),
-                    testTitle: t('settings.testTitle'),
-                  }}
-                  providerTestState={providerTestState}
-                  renderTestMessage={(result) => renderTestMessage(result, 'api')}
-                  suppressResultStatus={
-                    providerTestBaseUrlInvalid || providerTestApiKeyAuthFailed
-                  }
-                  suppressReadyState={Boolean(
-                    byokPreconditionNotice ||
-                      apiKeyFieldAuthFailed ||
-                      providerTestBaseUrlInvalid ||
-                      byokBlockingDraftIssues.length > 0,
-                  )}
-                  onTestProvider={() => handleTestProvider()}
-                />
-              </div>
-              {byokActivationPreflightReason ? (
-                <p
-                  className="settings-test-status warn"
-                  role="status"
-                  data-testid="settings-byok-draft-notice"
-                >
-                  {t('settings.byokDraftNotice')}
-                </p>
-              ) : null}
-              {byokPreconditionNotice && !byokPreconditionNotice.field ? (
-                <p
-                  className="settings-test-status error"
-                  role="alert"
-                  aria-live="polite"
-                  data-action={byokPreconditionNotice.action}
-                >
-                  {byokPreconditionNotice.message}
-                </p>
-              ) : null}
-              {showProviderPreset ? (
-                <ByokProviderPicker
-                  label={t('settings.providerPreset')}
-                  customProviderLabel={t('settings.customProvider')}
-                  providers={protocolProviders}
-                  selectedProviderIndex={selectedProviderIndex}
-                  onCustomProviderSelect={() => {
-                    setApiModelCustomEditing(false);
-                    updateApiConfig({
-                      baseUrl: '',
-                      model: '',
-                      apiProviderBaseUrl: null,
-                    });
-                  }}
-                  onProviderSelect={(p) => {
-                    setApiModelCustomEditing(false);
-                    updateApiConfig({
-                      baseUrl: p.baseUrl,
-                      model: defaultKnownProviderModel(p),
-                      apiProviderBaseUrl: p.baseUrl,
-                    });
-                  }}
-                />
-              ) : null}
-              <ByokKeyField
-                apiKey={cfg.apiKey}
-                apiKeyConsoleLink={apiKeyConsoleLink}
-                apiProtocol={apiProtocol}
-                inputRef={apiKeyInputRef}
-                labels={{
-                  apiHint: t('settings.apiHint'),
-                  apiKey: t('settings.apiKey'),
-                  apiKeyCleaned: t('settings.apiKeyCleaned'),
-                  apiKeyGetLink: t('settings.apiKeyGetLink', {
-                    host: apiKeyConsoleLink.host,
-                  }),
-                  apiKeyInvalid: t('settings.apiKeyInvalid'),
-                  hide: t('settings.hide'),
-                  hideKey: t('settings.hideKey'),
-                  required: t('settings.required'),
-                  show: t('settings.show'),
-                  showKey: t('settings.showKey'),
-                }}
-                requiresApiKey={byokRequiresApiKey}
-                showApiKeyInvalid={Boolean(
-                  apiKeyFieldAuthFailed ||
-                    byokPreconditionNotice?.field === 'api_key' ||
-                    apiKeyDraftInvalid,
-                )}
-                showApiKey={showApiKey}
-                onBlur={onByokKeyCommit}
-                onChange={(value) => {
-                  committedClearedByokProviderKeyRef.current = null;
-                  updateApiConfig({ apiKey: value });
-                }}
-                onFocus={() => {
-                  const byokProviderId = byokProtocolToTracking(apiProtocol);
-                  if (byokProviderId) {
-                    trackSettingsByokFieldClick(analytics.track, {
-                      page_name: 'settings',
-                      area: 'configure_execution_mode_byok',
-                      element: 'api_key',
-                      provider_id: byokProviderId,
-                      has_value: Boolean(cfg.apiKey?.trim()),
-                    });
-                  }
-                }}
-                onToggleShowApiKey={() => setShowApiKey((v) => !v)}
-              />
-              {showBaseUrlField ? (
-                <ByokProviderBaseUrl
-                  apiProtocol={apiProtocol}
-                  inputRef={baseUrlInputRef}
-                  baseUrl={cfg.baseUrl}
-                  baseUrlError={baseUrlErrorMessage}
-                  baseUrlInvalid={Boolean(baseUrlErrorMessage)}
-                  baseUrlPlaceholder={baseUrlPlaceholder}
-                  baseUrlReadOnly={baseUrlReadOnly}
-                  labels={{
-                    baseUrl: t('settings.baseUrl'),
-                    required: t('settings.required'),
-                    customize: t('settings.baseUrlCustomize'),
-                    invalid: t('settings.baseUrlInvalid'),
-                    defaultHint: t('settings.baseUrlDefaultHint'),
-                    azureHint: t('settings.azureBaseUrlHint'),
-                  }}
-                  onBlur={commitProviderModelsInputs}
-                  onChange={(value) =>
-                    updateApiConfig({
-                      baseUrl: value,
-                      apiProviderBaseUrl: apiProtocol === 'azure' ? '' : null,
-                    })
-                  }
-                  onCustomize={() => {
-                    updateApiConfig({ apiProviderBaseUrl: null });
-                    window.setTimeout(() => baseUrlInputRef.current?.focus(), 0);
-                  }}
-                  onFocus={() => {
-                    const byokProviderId = byokProtocolToTracking(apiProtocol);
-                    if (byokProviderId) {
-                      trackSettingsByokFieldClick(analytics.track, {
-                        page_name: 'settings',
-                        area: 'configure_execution_mode_byok',
-                        element: 'base_url',
-                        provider_id: byokProviderId,
-                        has_value: Boolean(cfg.baseUrl?.trim()),
-                      });
-                    }
-                  }}
-                />
-              ) : null}
-              <label className="field">
-                <span className="field-label">{t('settings.maxTokens')}</span>
-                <input
-                  type="number"
-                  min={MIN_MAX_TOKENS}
-                  max={MAX_MAX_TOKENS}
-                  step={1}
-                  placeholder={String(modelMaxTokensDefault(cfg.model))}
-                  value={maxTokensInput}
-                  onChange={(e) => updateMaxTokensInput(e.target.value)}
-                  onBlur={() => setMaxTokensInput(cfg.maxTokens == null ? '' : String(cfg.maxTokens))}
-                />
-                <p className="hint">{t('settings.maxTokensHint')}</p>
-              </label>
-              <ByokModelField
-                customActive={apiModelCustomActive}
-                customInputRef={customModelInputRef}
-                labels={{
-                  customModel: t('settings.modelCustom'),
-                  customModelLabel: apiProtocol === 'azure'
-                    ? t('settings.azureCustomDeploymentName')
-                    : t('settings.modelCustomLabel'),
-                  customModelPlaceholder: apiProtocol === 'azure'
-                    ? t('settings.azureDeploymentModel')
-                    : t('settings.modelCustomPlaceholder'),
-                  fetchModelsUnsupported: t('settings.fetchModelsUnsupported'),
-                  model: apiProtocol === 'azure'
-                    ? t('settings.azureDeploymentModel')
-                    : t('settings.model'),
-                  required: t('settings.required'),
-                  searchPlaceholder: t('designs.searchPlaceholder'),
-                  suggestedModelsHint: t('settings.suggestedModelsHint'),
-                }}
-                model={cfg.model}
-                modelSelectRef={modelSelectRef}
-                models={apiModelOptions.map((m) => ({
-                  ...m,
-                  label: apiModelOptionLabel(
-                    m,
-                    !hidesAccountModelSourceLabel(apiProtocol) &&
-                    loadedAccountModelCount > 0
-                      ? fetchedApiModelIds.has(m.id)
-                        ? t('settings.modelSourceAccount')
-                        : t('settings.modelSourceSuggested')
-                      : undefined,
-                  ),
-                }))}
-                modelsLoadedFromAccountMessage={
-                  loadedAccountModelCount > 0
-                    ? t(
-                        hidesAccountModelSourceLabel(apiProtocol)
-                          ? 'settings.modelsLoadedCount'
-                          : 'settings.modelsLoadedFromAccount',
-                        {
-                          count: loadedAccountModelCount,
-                        },
-                      )
-                    : null
-                }
-                providerModelsFailureMessage={providerModelsFailureMessage}
-                forceTextInput={apiProtocol === 'azure'}
-                showAzureModelFetchHint={apiProtocol === 'azure'}
-                showFetchModelsUnsupportedHint={
-                  apiProtocol !== 'azure' &&
-                  isProviderModelDiscoveryUnsupported(apiProtocol, cfg.baseUrl)
-                }
-                showSuggestedModelsHint={apiProtocol !== 'azure' && !selectedProvider}
-                azureModelFetchHint={t('settings.azureModelFetchHint')}
-                onCustomModelChange={(value) => updateApiConfig({ model: value })}
-                onCustomModelSelect={() => {
-                  apiModelUserSelectedRef.current = true;
-                  setApiModelCustomEditing(true);
-                  updateApiConfig({ model: '' });
-                }}
-                onFocus={() => {
-                  const byokProviderId = byokProtocolToTracking(apiProtocol);
-                  if (byokProviderId) {
-                    trackSettingsByokFieldClick(analytics.track, {
-                      page_name: 'settings',
-                      area: 'configure_execution_mode_byok',
-                      element: 'model',
-                      provider_id: byokProviderId,
-                      has_value: Boolean(cfg.model?.trim()),
-                    });
-                  }
-                }}
-                onModelSelect={(nextValue) => {
-                  apiModelUserSelectedRef.current = true;
-                  setApiModelCustomEditing(false);
-                  updateApiConfig({ model: nextValue });
-                }}
-              />
-              <details className="agent-cli-env settings-memory-advanced">
-                <summary className="agent-cli-env-summary">
-                  <span className="agent-cli-env-summary-title">
-                    {t('settings.memoryModelInlineLabel')}
-                  </span>
-                </summary>
-                <div className="agent-cli-env-body">
-                  <MemoryModelInline
-                    mode="api"
-                    apiProtocol={apiProtocol}
-                    chatApiKey={cfg.apiKey}
-                    chatBaseUrl={cfg.baseUrl}
-                    chatApiVersion={cfg.apiVersion ?? ''}
-                    chatModel={cfg.model}
-                    apiModelOptions={apiModelOptions}
-                  />
-                </div>
-              </details>
-              {apiProtocol === 'azure' ? (
-                <label className="field">
-                  <span className="field-label">{t('settings.apiVersion')}</span>
-                  <input
-                    type="text"
-                    value={cfg.apiVersion ?? ''}
-                    placeholder="2024-10-21"
-                    onBlur={commitProviderModelsInputs}
-                    onChange={(e) => updateApiConfig({ apiVersion: e.target.value.trim() })}
-                  />
-                </label>
-              ) : null}
-              {apiProtocol === 'senseaudio' || apiProtocol === 'aihubmix' ? (
-                <label className="field">
-                  <span className="field-label">{t('settings.byokImageModel')}</span>
-                  <SearchableModelSelect
-                    className="inline-switcher__select settings-model-select settings-model-select--byok"
-                    aria-label={t('settings.byokImageModel')}
-                    searchPlaceholder={t('designs.searchPlaceholder')}
-                    popoverClassName="settings-byok-select-popover"
-                    minSearchableOptions={Number.POSITIVE_INFINITY}
-                    // Live catalogue from the shared hook: AIHubMix's image
-                    // models for aihubmix, the static SenseAudio registry
-                    // otherwise. The default-empty option (first entry) resolves
-                    // to the registry default on the daemon side.
-                    models={[
-                      {
-                        id: '',
-                        label: byokImageModelOptions[0]?.label
-                          ? `${byokImageModelOptions[0].label} (${t('settings.byokModelDefaultOption')})`
-                          : t('settings.byokModelDefaultOption'),
-                      },
-                      ...byokImageModelOptions.map((m) => ({ id: m.id, label: m.label })),
-                    ]}
-                    value={cfg.byokImageModel ?? ''}
-                    onChange={(value) =>
-                      updateApiConfig({ byokImageModel: value })
-                    }
-                  />
-                </label>
-              ) : null}
-              {apiProtocol === 'aihubmix' ? (
-                <label className="field">
-                  <span className="field-label">{t('settings.byokVideoModel')}</span>
-                  <select
-                    value={cfg.byokVideoModel ?? ''}
-                    onChange={(e) =>
-                      updateApiConfig({ byokVideoModel: e.target.value })
-                    }
-                  >
-                    {/* Empty resolves to the default video model on the daemon
-                        side. The LLM can still override per-call via the tool's
-                        `model` arg. */}
-                    <option value="">
-                      {byokVideoModelOptions[0]?.label
-                        ? `${byokVideoModelOptions[0].label} (${t('settings.byokModelDefaultOption')})`
-                        : t('settings.byokModelDefaultOption')}
-                    </option>
-                    {byokVideoModelOptions.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {apiProtocol === 'aihubmix' ? (
-                <label className="field">
-                  <span className="field-label">{t('settings.byokSpeechModel')}</span>
-                  <select
-                    value={cfg.byokSpeechModel ?? ''}
-                    onChange={(e) => updateApiConfig({ byokSpeechModel: e.target.value })}
-                  >
-                    <option value="">
-                      {byokSpeechModelOptions[0]?.label
-                        ? `${byokSpeechModelOptions[0].label} (${t('settings.byokModelDefaultOption')})`
-                        : t('settings.byokModelDefaultOption')}
-                    </option>
-                    {byokSpeechModelOptions.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {apiProtocol === 'aihubmix' ? (
-                <label className="field">
-                  <span className="field-label">{t('settings.byokSpeechVoice')}</span>
-                  <select
-                    value={cfg.byokSpeechVoice ?? ''}
-                    onChange={(e) => updateApiConfig({ byokSpeechVoice: e.target.value })}
-                  >
-                    <option value="">alloy (default)</option>
-                    {['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-            </section>
           )}
               <ModelPriceOverridesSection />
             </>
@@ -6247,21 +5663,9 @@ export function SettingsDialog({
                 </div>
                 <ExportDiagnosticsRow />
               </div>
-              <div className="settings-about-diagnostics">
-                <div className="settings-about-diagnostics-text">
-                  <h4>{t('settings.resetOnboarding')}</h4>
-                  <p className="hint">{t('settings.resetOnboardingDesc')}</p>
-                </div>
-                <Button onClick={handleResetOnboarding}>
-                  {t('settings.resetOnboardingButton')}
-                </Button>
-              </div>
             </section>
           ) : null}
 
-          {activeSection === 'workspace' && showWorkspaceSettings ? (
-            <SettingsWorkspaceSection context={workspaceContext} />
-          ) : null}
           {aboutToast ? (
             <Toast
               message={aboutToast}

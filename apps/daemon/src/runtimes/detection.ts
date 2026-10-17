@@ -65,6 +65,10 @@ const detectedRuntimeCapabilityProbes = new Map<
   string,
   Promise<RuntimeCapabilityMap | null>
 >();
+// A single-capability re-read (`ensureDetectedRuntimeCapability`) that still
+// cannot answer waits this long before trying again for the same launch scope.
+const unknownRuntimeCapabilityRetryAt = new Map<string, number>();
+const UNKNOWN_RUNTIME_CAPABILITY_RETRY_TTL_MS = 30_000;
 
 // How many unusable binaries detection will walk past before giving up on an
 // agent. Each attempt costs one bounded `--version` spawn, and the healthy
@@ -179,6 +183,65 @@ export async function ensureDetectedRuntimeCapabilities(
       detectedRuntimeCapabilityProbes.delete(probeKey);
     }
   }
+}
+
+/**
+ * Answer whether the installed CLI advertises ONE capability, re-reading
+ * `--help` once when the cached map holds no answer for it.
+ *
+ * A `--help` probe that times out or fails is cached as an empty map, which
+ * `ensureDetectedRuntimeCapabilities` then serves for the rest of the daemon's
+ * life. For an optional flag the caller wants to forward, "unknown" is not
+ * "unsupported": this re-probes once so a transient failure does not silently
+ * cost the user their setting. A successful re-read is merged into the shared
+ * cache; a re-read that is still inconclusive starts a short cooldown so a CLI
+ * whose `--help` keeps hanging does not add a probe timeout to every run.
+ *
+ * Returns `true` / `false` when the CLI answered, `undefined` when support is
+ * still unknown. Callers must treat `undefined` as "do not forward".
+ */
+export async function ensureDetectedRuntimeCapability(
+  agentId: string | null | undefined,
+  capability: string,
+  configuredAgentEnv: Record<string, string> = {},
+): Promise<boolean | undefined> {
+  const cached = await ensureDetectedRuntimeCapabilities(agentId, configuredAgentEnv);
+  if (typeof cached?.[capability] === 'boolean') return cached[capability];
+  if (!agentId) return undefined;
+  const def = AGENT_DEFS.find((candidate) => candidate.id === agentId);
+  if (!def) return undefined;
+  const context = runtimeVersionProbeContext(def, configuredAgentEnv);
+  if (!context) return undefined;
+  const retryKey = `${agentId}:${context.scope}`;
+  if (Date.now() < (unknownRuntimeCapabilityRetryAt.get(retryKey) ?? 0)) {
+    return undefined;
+  }
+  const probeKey = `${retryKey}:reprobe`;
+  let probe = detectedRuntimeCapabilityProbes.get(probeKey);
+  if (!probe) {
+    probe = probeCapabilities(def, context.launchPath, context.probeEnv);
+    detectedRuntimeCapabilityProbes.set(probeKey, probe);
+  }
+  let refreshed: RuntimeCapabilityMap | null;
+  try {
+    refreshed = await probe;
+  } finally {
+    if (detectedRuntimeCapabilityProbes.get(probeKey) === probe) {
+      detectedRuntimeCapabilityProbes.delete(probeKey);
+    }
+  }
+  const answer = refreshed?.[capability];
+  if (typeof answer !== 'boolean') {
+    unknownRuntimeCapabilityRetryAt.set(
+      retryKey,
+      Date.now() + UNKNOWN_RUNTIME_CAPABILITY_RETRY_TTL_MS,
+    );
+    return undefined;
+  }
+  unknownRuntimeCapabilityRetryAt.delete(retryKey);
+  agentCapabilities.set(def.id, { ...(agentCapabilities.get(def.id) ?? {}), ...refreshed });
+  detectedRuntimeCapabilityScopes.set(def.id, context.scope);
+  return answer;
 }
 
 function configuredEnvForAgent(
@@ -807,6 +870,7 @@ function stripFns(
     fallbackModels,
     helpArgs,
     capabilityFlags,
+    reasoningCapability,
     fallbackBins,
     versionProbeTimeoutMs,
     versionPolicy,
@@ -816,6 +880,7 @@ function stripFns(
     inactivityTimeoutMs,
     firstOutputTimeoutMs,
     authProbe,
+    structuredStreamUpgrade,
     ...rest
   } = def;
   return rest;

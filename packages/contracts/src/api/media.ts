@@ -165,6 +165,12 @@ const MEDIA_FAILURE_NEXT_STEP_BY_CODE: Readonly<Record<string, MediaFailureNextS
   // Identity behind an OD-owned model.
   AMR_AUTH_REQUIRED: 'sign-in',
   AGENT_AUTH_REQUIRED: 'sign-in',
+  // Codex Subscription images: the local Codex CLI is signed out (or signed in
+  // with an API key, which this route never spends) — `codex login` fixes it.
+  CODEX_AUTH_REQUIRED: 'sign-in',
+  // Codex Subscription images: no Codex CLI on this machine, so this model
+  // cannot render here at all; another image model can.
+  CODEX_CLI_UNAVAILABLE: 'switch-model',
 };
 
 /**

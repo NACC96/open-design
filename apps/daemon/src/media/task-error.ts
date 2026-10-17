@@ -1,5 +1,7 @@
 import { mediaFailureNextStep } from '@open-design/contracts';
 
+import { canonicalMediaModelId } from './models.js';
+
 import type { MediaTaskError } from './tasks.js';
 
 /**
@@ -47,7 +49,7 @@ export function mediaTaskErrorFromFailure(
       status: typeof err?.status === 'number' ? err.status : undefined,
       message,
       retryable: typeof retryable === 'boolean' ? retryable : undefined,
-      model: context.model,
+      model: context.model ? canonicalMediaModelId(context.model) : undefined,
     }),
   };
 }
