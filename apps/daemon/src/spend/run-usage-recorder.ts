@@ -44,7 +44,7 @@ export function recordRunUsageEvent(
   if (!run.assistantMessageId || typeof run.id !== 'string' || !run.id) return;
   let accumulator = accumulators.get(run);
   if (!accumulator) {
-    accumulator = createRunUsageAccumulator();
+    accumulator = createRunUsageAccumulator({ agentId: stringOrNull(run.agentId) });
     accumulators.set(run, accumulator);
   }
   const changed = accumulator.fold(event, data);

@@ -108,6 +108,23 @@ describe('tokenCostUsd', () => {
       tokenCostUsd({ input: 0, output: 0, cacheRead: 1_000_000, cacheWrite: 1_000_000 }, { input: 2, output: 8 }),
     ).toBe(4);
   });
+
+  it('bills one-hour cache writes at twice the input rate', () => {
+    // Turn one of claude-2.1.259-partial-two-turns.jsonl (daemon fixtures):
+    // Claude Code reported total_cost_usd 0.0186959 for exactly this usage.
+    const haiku = resolveModelPrice('claude-haiku-4-5-20251001')!.price;
+    const cost = tokenCostUsd(
+      { input: 18, output: 459, cacheRead: 40_749, cacheWrite: 6_154, cacheWrite1h: 6_154 },
+      haiku,
+    );
+    expect(cost).toBeCloseTo(0.0186959, 10);
+  });
+
+  it('never bills more one-hour writes than there are cache writes', () => {
+    expect(
+      tokenCostUsd({ input: 0, output: 0, cacheRead: 0, cacheWrite: 100, cacheWrite1h: 1_000 }, { input: 1, output: 1, cacheWrite: 1.25 }),
+    ).toBeCloseTo(0.0002, 12);
+  });
 });
 
 describe('BUNDLED_MODEL_PRICES', () => {

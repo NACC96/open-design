@@ -50,6 +50,7 @@ export function migrateRunUsage(db: SqliteDb): void {
       output_tokens INTEGER NOT NULL DEFAULT 0,
       cache_read_tokens INTEGER NOT NULL DEFAULT 0,
       cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_1h_tokens INTEGER NOT NULL DEFAULT 0,
       reasoning_tokens INTEGER NOT NULL DEFAULT 0,
       usage_events INTEGER NOT NULL DEFAULT 0,
       reported_cost_usd REAL,
@@ -82,6 +83,7 @@ function recordParams(record: RunUsageRecord, now: number) {
     outputTokens: Math.round(usage.tokens.output),
     cacheReadTokens: Math.round(usage.tokens.cacheRead),
     cacheWriteTokens: Math.round(usage.tokens.cacheWrite),
+    cacheWrite1hTokens: Math.round(usage.tokens.cacheWrite1h),
     reasoningTokens: Math.round(usage.reasoningTokens),
     usageEvents: usage.usageEvents,
     reportedCostUsd: usage.reportedCostUsd,
@@ -97,7 +99,7 @@ function recordParams(record: RunUsageRecord, now: number) {
 
 const COLUMNS = `
   run_id, message_id, agent_id, requested_model, launch_model, reported_model,
-  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, reasoning_tokens,
   usage_events, reported_cost_usd, reported_cost_complete,
   catalog_input_price, catalog_output_price, source, approximate, model_inferred,
   created_at, updated_at
@@ -105,7 +107,7 @@ const COLUMNS = `
 
 const VALUES = `
   @runId, @messageId, @agentId, @requestedModel, @launchModel, @reportedModel,
-  @inputTokens, @outputTokens, @cacheReadTokens, @cacheWriteTokens, @reasoningTokens,
+  @inputTokens, @outputTokens, @cacheReadTokens, @cacheWriteTokens, @cacheWrite1hTokens, @reasoningTokens,
   @usageEvents, @reportedCostUsd, @reportedCostComplete,
   @catalogInputPrice, @catalogOutputPrice, @source, @approximate, @modelInferred,
   @now, @now
@@ -125,6 +127,7 @@ export function upsertRunUsage(db: SqliteDb, record: RunUsageRecord, now = Date.
       output_tokens = excluded.output_tokens,
       cache_read_tokens = excluded.cache_read_tokens,
       cache_write_tokens = excluded.cache_write_tokens,
+      cache_write_1h_tokens = excluded.cache_write_1h_tokens,
       reasoning_tokens = excluded.reasoning_tokens,
       usage_events = excluded.usage_events,
       reported_cost_usd = excluded.reported_cost_usd,
@@ -162,6 +165,7 @@ export interface ProjectRunUsageRow {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cacheWrite1hTokens: number;
   usageEvents: number;
   reportedCostUsd: number | null;
   reportedCostComplete: boolean;
@@ -188,6 +192,7 @@ export function listProjectRunUsage(db: SqliteDb, projectId: string): ProjectRun
       ru.output_tokens AS outputTokens,
       ru.cache_read_tokens AS cacheReadTokens,
       ru.cache_write_tokens AS cacheWriteTokens,
+      ru.cache_write_1h_tokens AS cacheWrite1hTokens,
       ru.usage_events AS usageEvents,
       ru.reported_cost_usd AS reportedCostUsd,
       ru.reported_cost_complete AS reportedCostComplete,

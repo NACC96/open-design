@@ -8,53 +8,57 @@ function fold(events: Array<[string, unknown]>) {
 }
 
 describe('createRunUsageAccumulator', () => {
-  it('sums Claude per-turn tokens but counts the process-cumulative cost once', () => {
-    // Two `result` frames from one held-open stream-json process: tokens are
-    // per turn, `total_cost_usd` is the running process total.
+  it('sums Claude per-turn tokens and ignores its session running cost', () => {
+    // Two `result` frames from one held-open stream-json process: `usage` is
+    // per turn, `total_cost_usd` a running total that a resumed session can
+    // carry over from earlier runs, so it says nothing about this run.
     const snapshot = fold([
       ['start', {}],
       ['agent', { type: 'status', label: 'initializing', model: 'claude-opus-5-5' }],
       ['agent', {
         type: 'usage',
-        usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 5000, cache_creation_input_tokens: 2000 },
-        costUsd: 0.0187,
-        costScope: 'process_cumulative',
+        usage: {
+          input_tokens: 10,
+          output_tokens: 100,
+          cache_read_input_tokens: 5000,
+          cache_creation_input_tokens: 2000,
+          cache_creation: { ephemeral_1h_input_tokens: 1500, ephemeral_5m_input_tokens: 500 },
+        },
+        costUsd: 9.86,
+        costScope: 'session_cumulative',
       }],
       ['agent', {
         type: 'usage',
-        usage: { input_tokens: 10, output_tokens: 101, cache_read_input_tokens: 7000, cache_creation_input_tokens: 100 },
-        costUsd: 0.0219,
-        costScope: 'process_cumulative',
+        usage: {
+          input_tokens: 10,
+          output_tokens: 101,
+          cache_read_input_tokens: 7000,
+          cache_creation_input_tokens: 100,
+          cache_creation: { ephemeral_1h_input_tokens: 100, ephemeral_5m_input_tokens: 0 },
+        },
+        costUsd: 10.14,
+        costScope: 'session_cumulative',
       }],
     ]);
-    expect(snapshot.tokens).toEqual({ input: 20, output: 201, cacheRead: 12000, cacheWrite: 2100 });
-    expect(snapshot.reportedCostUsd).toBeCloseTo(0.0219, 10);
-    expect(snapshot.reportedCostComplete).toBe(true);
+    expect(snapshot.tokens).toEqual({ input: 20, output: 201, cacheRead: 12000, cacheWrite: 2100, cacheWrite1h: 1600 });
+    expect(snapshot.usageEvents).toBe(2);
+    expect(snapshot.reportedCostUsd).toBeNull();
+    expect(snapshot.reportedCostComplete).toBe(false);
     expect(snapshot.reportedModel).toBe('claude-opus-5-5');
   });
 
-  it('takes Claude token totals from modelUsage, sub-agents included, as a process running total', () => {
-    const result = (modelUsage: Record<string, unknown>, costUsd: number) => ({
-      type: 'usage',
-      usage: { input_tokens: 6, output_tokens: 1502, cache_read_input_tokens: 1_409_993, cache_creation_input_tokens: 16_063 },
-      costUsd,
-      costScope: 'process_cumulative',
-      modelUsage,
-    });
-    const snapshot = fold([
-      ['start', {}],
-      ['agent', result({
-        'claude-opus-5-5': { inputTokens: 100, outputTokens: 2000, cacheReadInputTokens: 5_000_000, cacheCreationInputTokens: 90_000, thinkingTokens: 300 },
-      }, 10)],
-      ['agent', result({
-        'claude-opus-5-5': { inputTokens: 150, outputTokens: 3000, cacheReadInputTokens: 9_000_000, cacheCreationInputTokens: 120_000, thinkingTokens: 400 },
-        'claude-haiku-5-5': { inputTokens: 500, outputTokens: 40, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
-      }, 26.8)],
-    ]);
-    // The latest running total, never the sum of readings, and never the main-thread `usage`.
-    expect(snapshot.tokens).toEqual({ input: 650, output: 3040, cacheRead: 9_000_000, cacheWrite: 120_000 });
-    expect(snapshot.reasoningTokens).toBe(400);
-    expect(snapshot.reportedCostUsd).toBeCloseTo(26.8, 10);
+  it('reads an unmarked usage event by the scope its agent is known to use', () => {
+    const events: Array<[string, unknown]> = [
+      ['agent', { type: 'usage', usage: { input_tokens: 10, output_tokens: 20 }, costUsd: 3.5 }],
+    ];
+    // A Claude run log written before the scope marker existed.
+    const claude = createRunUsageAccumulator({ agentId: 'claude' });
+    for (const [event, data] of events) claude.fold(event, data);
+    expect(claude.snapshot()).toMatchObject({ usageEvents: 1, reportedCostUsd: null, reportedCostComplete: false });
+
+    const other = createRunUsageAccumulator({ agentId: 'opencode' });
+    for (const [event, data] of events) other.fold(event, data);
+    expect(other.snapshot()).toMatchObject({ reportedCostUsd: 3.5, reportedCostComplete: true });
   });
 
   it('keeps each retry attempt\'s process cost', () => {
@@ -73,7 +77,7 @@ describe('createRunUsageAccumulator', () => {
       ['agent', { type: 'usage', usage: { input_tokens: 200, output_tokens: 20, cached_read_tokens: 150 }, costUsd: 0.02 }],
     ]);
     // Inclusive accounting: cached reads are part of input_tokens.
-    expect(snapshot.tokens).toEqual({ input: 100, output: 30, cacheRead: 200, cacheWrite: 0 });
+    expect(snapshot.tokens).toEqual({ input: 100, output: 30, cacheRead: 200, cacheWrite: 0, cacheWrite1h: 0 });
     expect(snapshot.reportedCostUsd).toBeCloseTo(0.03, 10);
     expect(snapshot.reportedCostComplete).toBe(true);
   });
@@ -82,7 +86,7 @@ describe('createRunUsageAccumulator', () => {
     const snapshot = fold([
       ['agent', { type: 'usage', usage: { input_tokens: 40, output_tokens: 5, cached_read_tokens: 9000 } }],
     ]);
-    expect(snapshot.tokens).toEqual({ input: 40, output: 5, cacheRead: 9000, cacheWrite: 0 });
+    expect(snapshot.tokens).toEqual({ input: 40, output: 5, cacheRead: 9000, cacheWrite: 0, cacheWrite1h: 0 });
     expect(snapshot.reportedCostUsd).toBeNull();
     expect(snapshot.reportedCostComplete).toBe(false);
   });
@@ -100,7 +104,7 @@ describe('createRunUsageAccumulator', () => {
       ['agent', turnUsage(300, 200, 50)],
       ['agent', turnUsage(700, 550, 90)],
     ]);
-    expect(snapshot.tokens).toEqual({ input: 150, output: 90, cacheRead: 550, cacheWrite: 0 });
+    expect(snapshot.tokens).toEqual({ input: 150, output: 90, cacheRead: 550, cacheWrite: 0, cacheWrite1h: 0 });
     expect(snapshot.approximate).toBe(false);
     expect(snapshot.reportedCostComplete).toBe(false);
   });

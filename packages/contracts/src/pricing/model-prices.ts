@@ -10,8 +10,7 @@
  *
  * Simplifications, deliberately not modeled: long-context tiers (OpenAI
  * >272K, Gemini Pro >200K, Claude Haiku 5.5 >100K input), off-peak discounts
- * (DeepSeek), batch / priority / fast-mode multipliers, and the 1-hour cache
- * write rate (cache writes are priced at the 5-minute rate).
+ * (DeepSeek), and batch / priority / fast-mode multipliers.
  */
 
 /** The date the bundled prices below were last checked against their sources. */
@@ -40,7 +39,19 @@ export interface PricedTokenCounts {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /**
+   * The part of `cacheWrite` cached for one hour rather than five minutes
+   * (Anthropic's `ephemeral_1h_input_tokens`). Absent: none.
+   */
+  cacheWrite1h?: number;
 }
+
+/**
+ * Anthropic bills a one-hour cache write at twice the base input price; the
+ * tables' `cacheWrite` is the five-minute rate (1.25x). Claude Code caches for
+ * one hour, so most of its cache writes bill at this rate.
+ */
+export const ONE_HOUR_CACHE_WRITE_INPUT_MULTIPLIER = 2;
 
 // [id, input, output, cacheRead, cacheWrite] — USD per 1M tokens. A null cache
 // price means the provider publishes none, so those tokens bill at `input`.
@@ -301,11 +312,13 @@ export function resolveModelPrice(
 
 /** USD cost of `tokens` at `price`. */
 export function tokenCostUsd(tokens: PricedTokenCounts, price: ModelTokenPrice): number {
+  const oneHourWrites = Math.min(tokens.cacheWrite, Math.max(0, tokens.cacheWrite1h ?? 0));
   return (
     tokens.input * price.input
     + tokens.output * price.output
     + tokens.cacheRead * (price.cacheRead ?? price.input)
-    + tokens.cacheWrite * (price.cacheWrite ?? price.input)
+    + (tokens.cacheWrite - oneHourWrites) * (price.cacheWrite ?? price.input)
+    + oneHourWrites * price.input * ONE_HOUR_CACHE_WRITE_INPUT_MULTIPLIER
   ) / 1_000_000;
 }
 

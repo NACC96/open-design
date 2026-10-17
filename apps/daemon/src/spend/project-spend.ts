@@ -76,7 +76,8 @@ async function replayRunLog(
   } catch {
     // The event log alone still carries the usage; the model may be reported in it.
   }
-  const accumulator = createRunUsageAccumulator();
+  const agentId = stringOrNull(state.agentId) ?? message.agentId;
+  const accumulator = createRunUsageAccumulator({ agentId });
   for (const line of log.split('\n')) {
     if (!line) continue;
     try {
@@ -90,7 +91,7 @@ async function replayRunLog(
   return {
     runId,
     messageId: message.messageId,
-    agentId: stringOrNull(state.agentId) ?? message.agentId,
+    agentId,
     requestedModel,
     launchModel: stringOrNull(state.resolvedModelId),
     usage: accumulator.snapshot(),
@@ -102,6 +103,12 @@ async function replayRunLog(
 // Persisted message events predate the scope markers, so the scope is read
 // off the agent: Codex usage is a running thread total and Claude/Qoder cost
 // is a running process total. Every other runtime reports per step.
+//
+// These events also dropped the cache counts, so Claude's tokens can't be
+// priced and its reported cost is used instead. That is safe only because a
+// run with no log predates durable run logs, and the Claude Code builds of
+// that time reset the running total per process; newer builds carry it across
+// `--resume`, which is why logged runs are priced from their tokens.
 const CUMULATIVE_USAGE_AGENTS = new Set(['codex']);
 type InputOutput = { input: number; output: number };
 const MODEL_ID_SHAPE = /^[A-Za-z0-9][\w.:/@[\]-]{1,127}$/;
@@ -165,7 +172,7 @@ function reconstructFromMessageEvents(
       ? null
       : sessionModels.get(`${message.conversationId}\0${agentId}`) ?? null;
     const usage: RunUsageSnapshot = {
-      tokens: { input, output, cacheRead: 0, cacheWrite: 0 },
+      tokens: { input, output, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 },
       reasoningTokens: 0,
       usageEvents,
       reportedCostUsd: cost,
@@ -230,9 +237,8 @@ function modelCandidates(row: ProjectRunUsageRow): string[] {
 }
 
 /**
- * Cost one turn. A cost the agent reported for all of its usage is used as
- * is: it is the most complete figure there is (Claude Code's covers sub-agent
- * and background calls that older recorded token counts miss). Otherwise the
+ * Cost one turn. A cost the agent reported for all of its usage (OpenCode,
+ * pi, Qoder; never Claude Code, see run-usage.ts) is used as is. Otherwise the
  * tokens are priced — user override, then the launch-time catalog price, then
  * the bundled table.
  */
@@ -245,6 +251,7 @@ export function priceRunUsageRow(
     output: row.outputTokens,
     cacheRead: row.cacheReadTokens,
     cacheWrite: row.cacheWriteTokens,
+    cacheWrite1h: row.cacheWrite1hTokens,
   };
   const catalog = row.catalogInputPrice !== null && row.catalogOutputPrice !== null
     ? { input: row.catalogInputPrice, output: row.catalogOutputPrice }

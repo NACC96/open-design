@@ -58,11 +58,21 @@ describe('project spend', () => {
     ['agent', { type: 'text_delta', delta: 'hello' }],
     ['agent', {
       type: 'usage',
-      usage: { input_tokens: 1000, output_tokens: 2000, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 0 },
-      costUsd: 0.5,
-      costScope: 'process_cumulative',
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 2000,
+        cache_read_input_tokens: 10_000,
+        cache_creation_input_tokens: 4000,
+        cache_creation: { ephemeral_1h_input_tokens: 3000, ephemeral_5m_input_tokens: 1000 },
+      },
+      // The resumed session's running total, not this turn's cost.
+      costUsd: 12.5,
+      costScope: 'session_cumulative',
     }],
   ];
+  // claude-sonnet-4-5 ($3 in / $15 out / $0.30 cache read / $3.75 5-minute and
+  // $6 one-hour cache write): 1K in + 2K out + 10K read + 1K 5m + 3K 1h writes.
+  const claudeTurnCost = (1000 * 3 + 2000 * 15 + 10_000 * 0.3 + 1000 * 3.75 + 3000 * 6) / 1_000_000;
 
   const codexTurn: Array<[string, unknown]> = [
     ['start', {}],
@@ -89,9 +99,9 @@ describe('project spend', () => {
     const codexCost = 0.2 * 5 + 0.8 * 0.5 + 0.1 * 30;
     expect(spend.total.turns).toBe(2);
     expect(spend.total.pricedTurns).toBe(2);
-    expect(spend.total.reportedTurns).toBe(1);
-    expect(spend.total.costUsd).toBeCloseTo(0.5 + codexCost, 10);
-    expect(spend.total.tokens).toEqual({ input: 201_000, output: 102_000, cacheRead: 810_000, cacheWrite: 0 });
+    expect(spend.total.reportedTurns).toBe(0);
+    expect(spend.total.costUsd).toBeCloseTo(claudeTurnCost + codexCost, 10);
+    expect(spend.total.tokens).toEqual({ input: 201_000, output: 102_000, cacheRead: 810_000, cacheWrite: 4000 });
     expect(spend.generatedAt).toBe(42);
 
     expect(spend.byModel.map((row) => [row.model, row.agentIds, row.priceSource])).toEqual([
@@ -104,26 +114,52 @@ describe('project spend', () => {
     ]);
   });
 
-  it('applies a price override only to turns whose agent did not report its own cost', async () => {
+  it('prices Claude turns from their own tokens across a resumed session', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-1');
+    assistant(db, 'conv-1', 'msg-2');
+    const run = (sessionTotal: number): Array<[string, unknown]> => [
+      ['start', {}],
+      ['agent', { type: 'status', label: 'initializing', model: 'claude-sonnet-4-5' }],
+      ['agent', { ...(claudeTurn[3]![1] as Record<string, unknown>), costUsd: sessionTotal }],
+    ];
+    // The second run resumes the first's session, so its reported total includes the first run.
+    liveRun(db, { id: 'run-1', assistantMessageId: 'msg-1', agentId: 'claude' }, run(0.06));
+    liveRun(db, { id: 'run-2', assistantMessageId: 'msg-2', agentId: 'claude' }, run(0.12));
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total).toMatchObject({ turns: 2, pricedTurns: 2, reportedTurns: 0, estimatedTurns: 0 });
+    expect(spend.total.costUsd).toBeCloseTo(2 * claudeTurnCost, 10);
+    expect(spend.byModel[0]).toMatchObject({ model: 'claude-sonnet-4-5', priceSource: 'bundled' });
+  });
+
+  it('applies a price override to every turn priced from tokens, but not to a cost the agent reported', async () => {
     const db = seed();
     assistant(db, 'conv-1', 'msg-claude');
     assistant(db, 'conv-2', 'msg-codex');
+    assistant(db, 'conv-2', 'msg-opencode');
     liveRun(db, { id: 'run-claude', assistantMessageId: 'msg-claude', agentId: 'claude' }, claudeTurn);
     liveRun(db, { id: 'run-codex', assistantMessageId: 'msg-codex', agentId: 'codex', launchModel: 'gpt-5.5' }, codexTurn);
+    liveRun(db, { id: 'run-opencode', assistantMessageId: 'msg-opencode', agentId: 'opencode', launchModel: 'openai/gpt-5.4' }, [
+      ['agent', { type: 'usage', usage: { input_tokens: 1000, output_tokens: 100 }, costUsd: 0.07 }],
+    ]);
 
     const spend = await computeProjectSpend(db, 'proj-1', {
       runsLogDir,
       overrides: {
         'claude-sonnet-4-5': { input: 1, output: 1, cacheRead: 0 },
         'openai/gpt-5.5': { input: 1, output: 10, cacheRead: 0.1 },
+        'gpt-5.4': { input: 100, output: 100 },
       },
     });
-    // Claude reported $0.50 for the turn; its sub-agent work is in that figure, not in its tokens.
+    // No cacheWrite rate: 5-minute writes bill at input, one-hour writes at twice input.
     const claude = spend.byModel.find((row) => row.model === 'claude-sonnet-4-5');
-    expect(claude).toMatchObject({ reportedTurns: 1, costUsd: 0.5 });
+    expect(claude).toMatchObject({ priceSource: 'override', reportedTurns: 0 });
+    expect(claude?.costUsd).toBeCloseTo((1000 + 2000 + 1000 + 3000 * 2) / 1_000_000, 12);
     const codex = spend.byModel.find((row) => row.model === 'gpt-5.5');
     expect(codex?.priceSource).toBe('override');
     expect(codex?.costUsd).toBeCloseTo(0.2 * 1 + 0.8 * 0.1 + 0.1 * 10, 10);
+    expect(spend.byModel.find((row) => row.model === 'gpt-5.4')).toMatchObject({ reportedTurns: 1, costUsd: 0.07 });
   });
 
   it('prices AMR turns at the catalog price frozen at launch', async () => {
@@ -200,6 +236,24 @@ describe('project spend', () => {
     // The backfill is recorded once; a second read does not double count.
     const again = await computeProjectSpend(db, 'proj-1', { runsLogDir });
     expect(again.total.turns).toBe(1);
+  });
+
+  it('prices a replayed Claude log from its tokens even before usage carried a cost scope', async () => {
+    const db = seed();
+    assistant(db, 'conv-1', 'msg-old', { runId: 'run-old', agentId: 'claude' });
+    const runDir = path.join(runsLogDir, 'run-old');
+    mkdirSync(runDir);
+    writeFileSync(path.join(runDir, 'state.json'), JSON.stringify({ id: 'run-old', agentId: 'claude', model: 'default' }));
+    const unmarked = claudeTurn.map(([event, data]) => {
+      if ((data as { type?: string }).type !== 'usage') return [event, data];
+      const { costScope: _scope, ...rest } = data as Record<string, unknown>;
+      return [event, rest];
+    });
+    writeFileSync(path.join(runDir, 'events.jsonl'), unmarked.map(([event, data], i) => JSON.stringify({ id: i + 1, event, data })).join('\n'));
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total).toMatchObject({ turns: 1, pricedTurns: 1, reportedTurns: 0 });
+    expect(spend.total.costUsd).toBeCloseTo(claudeTurnCost, 10);
   });
 
   it('reconstructs turns without a run log from persisted message events, flagged estimated', async () => {

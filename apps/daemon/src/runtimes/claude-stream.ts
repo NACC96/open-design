@@ -911,13 +911,12 @@ export function createClaudeStreamHandler(
         type: 'usage',
         usage: obj.usage ?? null,
         costUsd: obj.total_cost_usd ?? null,
-        // `total_cost_usd` is the CLI process's running total, not this turn's
-        // share: the second `result` of a held-open stream-json session repeats
-        // the first turn's cost (claude-2.1.259-partial-two-turns.jsonl).
-        costScope: 'process_cumulative',
-        // Per-model totals behind that cost — sub-agent and background calls
-        // included, which `usage` (the main conversation only) leaves out.
-        ...(obj.modelUsage && typeof obj.modelUsage === 'object' ? { modelUsage: obj.modelUsage } : {}),
+        // `usage` is this turn's own; `total_cost_usd` is a running total, not
+        // this turn's share. It spans the held-open process (the second
+        // `result` of claude-2.1.259-partial-two-turns.jsonl repeats the
+        // first turn's cost) and, on newer CLI builds, every earlier process
+        // of a `--resume`d session as well.
+        costScope: 'session_cumulative',
         durationMs: obj.duration_ms ?? null,
         stopReason:
           (typeof obj.stop_reason === 'string' && obj.stop_reason) ||
