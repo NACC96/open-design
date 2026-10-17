@@ -10,7 +10,10 @@
  *     exec `turn.completed`): their tokens are summed.
  *   - `usageScope: 'sessionCumulative'` (Codex app-server) is a running
  *     thread total. Its `turnTokenUsage` is the turn's own share; the latest
- *     reading of each turn is kept, never summed.
+ *     reading of each turn is kept, never summed. Logs from before that field
+ *     fall back to `evaluationTurnUsage` (the turn's own input and output,
+ *     cache split estimated from the thread), then to the thread total's
+ *     growth over the run, which misses the first call.
  *   - `costScope: 'process_cumulative'` (Qoder) marks a `costUsd` that is the
  *     CLI process's running total: the attempt's highest reading counts once.
  *   - `costScope: 'session_cumulative'` (Claude Code) marks a running total
@@ -25,12 +28,11 @@
  * scope their agent is known to use ({@link LEGACY_COST_SCOPES}).
  *
  * `input` is always UNCACHED input. Additive (Anthropic-style) and inclusive
- * (OpenAI-style) payloads are told apart with the same rule run analytics
- * uses: a cache-read count larger than the input count can only be additive.
+ * (OpenAI-style) payloads are told apart by {@link cacheIsAdditive}.
  */
 
 import type { PricedTokenCounts } from '@open-design/contracts';
-import { extractUsageCacheFields } from '../run-analytics-observability.js';
+import { extractUsageCacheFields, type UsageCacheFields } from '../run-analytics-observability.js';
 
 export interface RunUsageSnapshot {
   tokens: Required<PricedTokenCounts>;
@@ -77,6 +79,30 @@ function nonNegative(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+/**
+ * Whether `input` excludes the cache counts. The generic cache aliases are
+ * used both ways — pi reports additive counters under them, OpenAI-style
+ * payloads inclusive ones — so a reported total that matches one convention
+ * exactly decides it. Without one, only a cache read larger than the input
+ * proves the counts additive.
+ */
+function cacheIsAdditive(
+  fields: UsageCacheFields,
+  input: number,
+  output: number,
+  cacheRead: number,
+  cacheWrite: number,
+): boolean {
+  if (fields.cacheTokenSource === 'anthropic') return true;
+  if (fields.cacheTokenSource !== 'openai') return false;
+  const total = fields.totalTokens;
+  if (total !== undefined && cacheRead + cacheWrite > 0) {
+    if (total === input + output + cacheRead + cacheWrite) return true;
+    if (total === input + output) return false;
+  }
+  return cacheRead > input;
+}
+
 /** Normalize one provider usage payload into price buckets; null when it carries no tokens. */
 export function bucketsFromUsagePayload(usage: Record<string, unknown>): Buckets | null {
   const fields = extractUsageCacheFields(usage);
@@ -89,17 +115,17 @@ export function bucketsFromUsagePayload(usage: Record<string, unknown>): Buckets
     return null;
   }
   const input = Math.max(0, fields.inputTokens ?? 0);
+  const output = Math.max(0, fields.outputTokens ?? 0);
   const cacheRead = Math.max(0, fields.cacheReadInputTokens ?? 0);
   const cacheWrite = Math.max(0, fields.cacheCreationInputTokens ?? 0);
-  const additive =
-    fields.cacheTokenSource === 'anthropic'
-    || (fields.cacheTokenSource === 'openai' && cacheRead > input);
   // Anthropic splits cache writes by lifetime; a one-hour write bills higher.
   const cacheCreation = isRecord(usage.cache_creation) ? usage.cache_creation : null;
   const oneHour = nonNegative(cacheCreation?.ephemeral_1h_input_tokens) ?? 0;
   return {
-    input: additive ? input : Math.max(0, input - cacheRead - cacheWrite),
-    output: Math.max(0, fields.outputTokens ?? 0),
+    input: cacheIsAdditive(fields, input, output, cacheRead, cacheWrite)
+      ? input
+      : Math.max(0, input - cacheRead - cacheWrite),
+    output,
     cacheRead,
     cacheWrite,
     cacheWrite1h: Math.min(cacheWrite, oneHour),
@@ -125,6 +151,43 @@ function bucketsFromCodexTurnUsage(value: unknown): Buckets | null {
     cacheWrite,
     cacheWrite1h: 0,
     reasoning,
+  };
+}
+
+/** Codex's `evaluationTurnUsage`: one turn's cache-inclusive input and output, with no cache split. */
+interface CodexEvaluationReading {
+  input: number;
+  output: number;
+  total: number;
+  modelCalls: number;
+}
+
+function codexEvaluationReading(value: unknown): CodexEvaluationReading | null {
+  if (!isRecord(value)) return null;
+  const input = nonNegative(value.input);
+  const output = nonNegative(value.output);
+  const total = nonNegative(value.total);
+  const modelCalls = nonNegative(value.modelCalls);
+  if (input === null || output === null || total === null || modelCalls === null) return null;
+  return { input, output, total, modelCalls };
+}
+
+/**
+ * Split a turn's cache-inclusive input and its output in the proportions of
+ * the thread's running totals — the closest guess for logs that kept no
+ * per-turn cache split.
+ */
+function splitByThreadShares(input: number, output: number, thread: Buckets): Buckets {
+  const threadInput = thread.input + thread.cacheRead + thread.cacheWrite;
+  const cacheRead = threadInput > 0 ? Math.round((input * thread.cacheRead) / threadInput) : 0;
+  const cacheWrite = threadInput > 0 ? Math.round((input * thread.cacheWrite) / threadInput) : 0;
+  return {
+    input: Math.max(0, input - cacheRead - cacheWrite),
+    output,
+    cacheRead,
+    cacheWrite,
+    cacheWrite1h: 0,
+    reasoning: thread.output > 0 ? Math.round((output * thread.reasoning) / thread.output) : 0,
   };
 }
 
@@ -178,7 +241,11 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
   // Codex app-server: the latest per-turn reading and completed turns.
   const completedTurns = emptyBuckets();
   let currentTurn: Buckets | null = null;
-  // Codex app-server fallback when no per-turn reading exists: thread totals.
+  // Codex app-server logs from before `turnTokenUsage`: per-turn input and
+  // output from `evaluationTurnUsage`, and the thread totals.
+  const completedEvaluation = { input: 0, output: 0 };
+  let currentEvaluation: CodexEvaluationReading | null = null;
+  let sawEvaluationReading = false;
   let firstCumulative: Buckets | null = null;
   let lastCumulative: Buckets | null = null;
   let sawTurnReading = false;
@@ -192,17 +259,25 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
   let sawCost = false;
   let reportedModel: string | null = null;
 
+  const commitEvaluation = () => {
+    if (!currentEvaluation) return;
+    completedEvaluation.input += currentEvaluation.input;
+    completedEvaluation.output += currentEvaluation.output;
+    currentEvaluation = null;
+  };
+
   const commitAttempt = () => {
     if (attemptCost !== null) committedAttemptCost += attemptCost;
     attemptCost = null;
     if (currentTurn) addBuckets(completedTurns, currentTurn);
     currentTurn = null;
+    commitEvaluation();
   };
 
   return {
     fold(event, data) {
       if (event === 'start') {
-        const pending = attemptCost !== null || currentTurn !== null;
+        const pending = attemptCost !== null || currentTurn !== null || currentEvaluation !== null;
         commitAttempt();
         return pending;
       }
@@ -227,6 +302,18 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
           currentTurn = turn;
         } else {
           if (sawTurnReading) approximate = true;
+          const evaluation = codexEvaluationReading(data.evaluationTurnUsage);
+          if (evaluation) {
+            sawEvaluationReading = true;
+            // Within a turn a reading only changes when a call is added, so
+            // fewer calls, or as many with a different total, is a new turn.
+            const previous = currentEvaluation;
+            if (previous && (evaluation.modelCalls < previous.modelCalls
+              || (evaluation.modelCalls === previous.modelCalls && evaluation.total !== previous.total))) {
+              commitEvaluation();
+            }
+            currentEvaluation = evaluation;
+          }
           const totals = isRecord(data.usage) ? bucketsFromUsagePayload(data.usage) : null;
           if (totals) {
             firstCumulative ??= totals;
@@ -261,7 +348,13 @@ export function createRunUsageAccumulator(options: RunUsageAccumulatorOptions = 
       addBuckets(total, completedTurns);
       if (currentTurn) addBuckets(total, currentTurn);
       let isApproximate = approximate;
-      if (!sawTurnReading && firstCumulative && lastCumulative) {
+      const evaluationInput = completedEvaluation.input + (currentEvaluation?.input ?? 0);
+      const evaluationOutput = completedEvaluation.output + (currentEvaluation?.output ?? 0);
+      if (!sawTurnReading && sawEvaluationReading && lastCumulative) {
+        // The turn's own tokens, with the cache split guessed from the thread.
+        addBuckets(total, splitByThreadShares(evaluationInput, evaluationOutput, lastCumulative));
+        isApproximate = true;
+      } else if (!sawTurnReading && firstCumulative && lastCumulative) {
         // No per-turn reading at all: the growth of the thread total over the
         // run misses the first call's share, so mark it approximate.
         total.input += Math.max(0, lastCumulative.input - firstCumulative.input);

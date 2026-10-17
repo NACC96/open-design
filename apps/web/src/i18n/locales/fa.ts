@@ -5440,4 +5440,6 @@ export const fa: Dict = {
   "settings.modelPricesSaveFailed": "ذخیرهٔ قیمت‌ها ممکن نشد",
   "settings.modelPricesInvalid": "هر ردیف به شناسهٔ مدل و قیمت‌های ورودی و خروجی نامنفی نیاز دارد.",
   "settings.modelPricesEmpty": "قیمت سفارشی وجود ندارد. قیمت‌های استاندارد API استفاده می‌شوند.",
+  "settings.modelPricesLoadFailed": "بارگیری قیمت‌های ذخیره‌شده ممکن نشد.",
+  "settings.modelPricesRetry": "تلاش دوباره",
 };

@@ -8,6 +8,11 @@ import type { BoundWorkspaceResourceMutationGate } from '../../collab/workspace-
 import type { AuthorizeProjectRequest } from '../../collab/project-request-authority.js';
 import { TERMINAL_RUN_STATUSES } from '../../runtimes/runs.js';
 import { strategyTaskTurnsForRunIds } from '../../strategies/task-store.js';
+import {
+  inheritedRunUsageRecord,
+  insertBackfilledRunUsage,
+  type RunUsageRecord,
+} from '../../spend/run-usage-store.js';
 
 import { registerProjectCommentRoutes } from './comments.js';
 import { cancelRunsOwnedBy } from './cancel-owned-runs.js';
@@ -295,14 +300,19 @@ export function registerProjectConversationRoutes(app: Express, ctx: RegisterPro
         (typeof sourceConversation?.title === 'string' && sourceConversation.title.trim())
           ? sourceConversation.title.trim()
           : null;
+      const inherited: RunUsageRecord[] = [];
       seedMessages.forEach((m, index) => {
         // Fresh id per copied message; upsertMessage assigns the next
         // position so role/content ordering is preserved. Drop the source's
         // run pointers (runId/lastRunEventId) but keep each turn's verdict —
         // see `settledForkVerdict`.
+        const id = randomId();
+        // The copy carries the source turn's usage events, but its spend
+        // stays with the source turn.
+        if (m.role === 'assistant') inherited.push(inheritedRunUsageRecord(id, m.agentId ?? null));
         upsertMessage(db, conv.id, {
           ...m,
-          id: randomId(),
+          id,
           runId: undefined,
           runStatus: settledForkVerdict(m.runStatus),
           lastRunEventId: undefined,
@@ -313,6 +323,7 @@ export function registerProjectConversationRoutes(app: Express, ctx: RegisterPro
               : undefined,
         });
       });
+      insertBackfilledRunUsage(db, inherited);
     }
     res.json({ conversation: conv });
   });

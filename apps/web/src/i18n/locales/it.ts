@@ -5445,4 +5445,6 @@ export const it: Dict = {
   "settings.modelPricesSaveFailed": "Impossibile salvare i prezzi",
   "settings.modelPricesInvalid": "Ogni riga richiede un ID modello e prezzi di input e output non negativi.",
   "settings.modelPricesEmpty": "Nessun prezzo personalizzato. Vengono usati i prezzi API standard.",
+  "settings.modelPricesLoadFailed": "Impossibile caricare i prezzi salvati.",
+  "settings.modelPricesRetry": "Riprova",
 };

@@ -5445,4 +5445,6 @@ export const id: Dict = {
   "settings.modelPricesSaveFailed": "Gagal menyimpan harga",
   "settings.modelPricesInvalid": "Setiap baris memerlukan ID model serta harga input dan output yang tidak negatif.",
   "settings.modelPricesEmpty": "Tidak ada harga khusus. Harga API standar digunakan.",
+  "settings.modelPricesLoadFailed": "Tidak dapat memuat harga yang Anda simpan.",
+  "settings.modelPricesRetry": "Coba lagi",
 };

@@ -5445,4 +5445,6 @@ export const fr: Dict = {
   "settings.modelPricesSaveFailed": "Impossible d'enregistrer les prix",
   "settings.modelPricesInvalid": "Chaque ligne nécessite un ID de modèle et des prix d'entrée et de sortie positifs ou nuls.",
   "settings.modelPricesEmpty": "Aucun prix personnalisé. Les prix API standard sont utilisés.",
+  "settings.modelPricesLoadFailed": "Impossible de charger vos prix enregistrés.",
+  "settings.modelPricesRetry": "Réessayer",
 };

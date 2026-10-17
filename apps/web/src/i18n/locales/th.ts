@@ -5445,4 +5445,6 @@ export const th: Dict = {
   "settings.modelPricesSaveFailed": "บันทึกราคาไม่ได้",
   "settings.modelPricesInvalid": "แต่ละแถวต้องมี ID โมเดล และราคาอินพุตกับเอาต์พุตที่ไม่ติดลบ",
   "settings.modelPricesEmpty": "ไม่มีราคาที่กำหนดเอง ระบบใช้ราคา API มาตรฐาน",
+  "settings.modelPricesLoadFailed": "โหลดราคาที่บันทึกไว้ไม่ได้",
+  "settings.modelPricesRetry": "ลองอีกครั้ง",
 };

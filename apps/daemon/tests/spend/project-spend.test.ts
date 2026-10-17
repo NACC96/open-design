@@ -13,6 +13,7 @@ import {
 } from '../../src/db.js';
 import { computeProjectSpend } from '../../src/spend/project-spend.js';
 import { recordRunUsageEvent, type RunUsageRunState } from '../../src/spend/run-usage-recorder.js';
+import { inheritedRunUsageRecord, insertBackfilledRunUsage } from '../../src/spend/run-usage-store.js';
 
 describe('project spend', () => {
   let tempDir: string;
@@ -279,6 +280,29 @@ describe('project spend', () => {
     expect(codex?.tokens).toMatchObject({ input: 1500, output: 150 });
     expect(codex?.costUsd).toBeCloseTo((1500 * 1.25 + 150 * 10) / 1_000_000, 12);
     expect(spend.byModel.find((row) => row.model === 'claude-opus-4-6')?.costUsd).toBeCloseTo(0.25, 10);
+  });
+
+  it('does not count a fork\'s copies of the source conversation\'s turns again', async () => {
+    const db = seed();
+    const turn = [{ kind: 'usage', inputTokens: 100, outputTokens: 10, costUsd: 0.1 }];
+    assistant(db, 'conv-1', 'msg-source', { agentId: 'opencode', events: turn });
+    // A fork from before the fork route recorded its copies: recognized by the
+    // boundary on the last message it copied. Its own later turn still counts.
+    assistant(db, 'conv-2', 'msg-copy', {
+      agentId: 'opencode',
+      events: turn,
+      forkedInto: { title: 'Landing page', conversationId: 'conv-1' },
+    });
+    assistant(db, 'conv-2', 'msg-after-fork', { agentId: 'opencode', events: [{ kind: 'usage', inputTokens: 50, outputTokens: 5, costUsd: 0.05 }] });
+    // A fork the route recorded: an untitled source leaves no boundary.
+    insertConversation(db, { id: 'conv-3', projectId: 'proj-1', title: null, createdAt: Date.now(), updatedAt: Date.now() });
+    assistant(db, 'conv-3', 'msg-copy-untitled', { agentId: 'opencode', events: turn });
+    insertBackfilledRunUsage(db, [inheritedRunUsageRecord('msg-copy-untitled', 'opencode')]);
+
+    const spend = await computeProjectSpend(db, 'proj-1', { runsLogDir });
+    expect(spend.total).toMatchObject({ turns: 2, reportedTurns: 2 });
+    expect(spend.total.costUsd).toBeCloseTo(0.15, 10);
+    expect(spend.byConversation.map((row) => row.conversationId).sort()).toEqual(['conv-1', 'conv-2']);
   });
 
   it('drops a conversation\'s spend with the conversation', async () => {

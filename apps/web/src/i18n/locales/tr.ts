@@ -5445,4 +5445,6 @@ export const tr: Dict = {
   "settings.modelPricesSaveFailed": "Fiyatlar kaydedilemedi",
   "settings.modelPricesInvalid": "Her satırda bir model kimliği ile negatif olmayan girdi ve çıktı fiyatları olmalı.",
   "settings.modelPricesEmpty": "Özel fiyat yok. Standart API fiyatları kullanılıyor.",
+  "settings.modelPricesLoadFailed": "Kayıtlı fiyatlarınız yüklenemedi.",
+  "settings.modelPricesRetry": "Yeniden dene",
 };

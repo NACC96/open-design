@@ -5445,4 +5445,6 @@ export const ru: Dict = {
   "settings.modelPricesSaveFailed": "Не удалось сохранить цены",
   "settings.modelPricesInvalid": "В каждой строке нужны ID модели и неотрицательные цены ввода и вывода.",
   "settings.modelPricesEmpty": "Своих цен нет. Используются стандартные цены API.",
+  "settings.modelPricesLoadFailed": "Не удалось загрузить сохранённые цены.",
+  "settings.modelPricesRetry": "Повторить",
 };

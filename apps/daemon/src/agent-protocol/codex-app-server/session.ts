@@ -298,12 +298,13 @@ export function attachCodexAppServerSession(
         // next turn would start a cold thread.
         reportSessionHandle(id);
         // `thread/start` and `thread/resume` both answer with the model the
-        // thread actually runs — the only place codex names it when the run
-        // left the choice to the CLI's own default. Reported the way ACP
-        // agents report theirs, so project spend and run analytics can
-        // attribute the turn; the chat does not render this status.
+        // thread runs — the only place codex names it when the run left the
+        // choice to the CLI's own default. A chosen model is applied later, by
+        // `turn/start`, so the thread's answer is not this turn's model then.
+        // Reported the way ACP agents report theirs, so project spend and run
+        // analytics can attribute the turn; the chat does not render it.
         const model = typeof result.model === 'string' ? result.model.trim() : '';
-        if (model) onAgentEvent({ type: 'status', label: 'model', model });
+        if (model && !chosen(opts.model)) onAgentEvent({ type: 'status', label: 'model', model });
         onSessionReady?.();
         startTurn();
         return;

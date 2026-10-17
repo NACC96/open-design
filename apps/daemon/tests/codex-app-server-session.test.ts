@@ -118,6 +118,14 @@ describe('codex app-server session', () => {
       expect(agentEvents.some((e) => e.type === 'status' && e.label === 'model')).toBe(false);
     });
 
+    it('does not report the thread model when the run chose its own, which turn/start applies', () => {
+      const { child, agentEvents } = harness({ model: 'gpt-6-luna' });
+      child.say({ id: child.sent('initialize')?.id, result: { userAgent: 'codex/0.153.4' } });
+      child.say({ id: child.sent('thread/start')?.id, result: { thread: { id: 'th-model' }, model: 'gpt-6.1-sol' } });
+      expect(child.sent('turn/start')?.params).toMatchObject({ model: 'gpt-6-luna' });
+      expect(agentEvents.some((e) => e.type === 'status' && e.label === 'model')).toBe(false);
+    });
+
     it('does not start a turn when cancellation races the handshake', () => {
       const { child, session } = harness();
       session.abort();

@@ -22,7 +22,9 @@ export type RunUsageSource =
   /** Replayed from the run's durable event log after the fact. */
   | 'replayed'
   /** Reconstructed from the assistant message's persisted events (lossy). */
-  | 'message_events';
+  | 'message_events'
+  /** A fork's copy of another conversation's turn: the source turn holds the spend. */
+  | 'inherited';
 
 export interface RunUsageRecord {
   runId: string;
@@ -141,6 +143,32 @@ export function upsertRunUsage(db: SqliteDb, record: RunUsageRecord, now = Date.
   `).run(recordParams(record, now));
 }
 
+/**
+ * The row for a fork's copy of another conversation's turn. The copy keeps
+ * the source's usage events but costs nothing of its own, so it gets an empty
+ * row — which project spend skips — instead of being backfilled from them.
+ */
+export function inheritedRunUsageRecord(messageId: string, agentId: string | null): RunUsageRecord {
+  return {
+    runId: `inherited:${messageId}`,
+    messageId,
+    agentId,
+    requestedModel: null,
+    launchModel: null,
+    usage: {
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0 },
+      reasoningTokens: 0,
+      usageEvents: 0,
+      reportedCostUsd: null,
+      reportedCostComplete: false,
+      reportedModel: null,
+      approximate: false,
+    },
+    catalogPrice: null,
+    source: 'inherited',
+  };
+}
+
 /** Insert backfilled rows; a row that already exists (a concurrent backfill, a live run) wins. */
 export function insertBackfilledRunUsage(db: SqliteDb, records: RunUsageRecord[], now = Date.now()): void {
   if (records.length === 0) return;
@@ -221,6 +249,8 @@ export interface UntrackedAssistantMessage {
   runId: string | null;
   agentId: string | null;
   position: number;
+  /** At or above a fork boundary: a copy of the source conversation's turn. */
+  inherited: boolean;
 }
 
 /** Assistant messages in a project that have no `run_usage` row yet (recorded before tracking). */
@@ -228,20 +258,29 @@ export function listUntrackedAssistantMessages(
   db: SqliteDb,
   projectId: string,
 ): UntrackedAssistantMessage[] {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       m.id AS messageId,
       m.conversation_id AS conversationId,
       m.run_id AS runId,
       m.agent_id AS agentId,
-      m.position AS position
+      m.position AS position,
+      -- A fork marks the last message it copied. Forks made before the fork
+      -- route recorded inherited rows are recognized this way.
+      EXISTS (
+        SELECT 1 FROM messages b
+        WHERE b.conversation_id = m.conversation_id
+          AND b.forked_into_json IS NOT NULL
+          AND b.position >= m.position
+      ) AS inherited
     FROM messages m
     JOIN conversations c ON c.id = m.conversation_id
     WHERE c.project_id = ?
       AND m.role = 'assistant'
       AND NOT EXISTS (SELECT 1 FROM run_usage ru WHERE ru.message_id = m.id)
     ORDER BY m.conversation_id, m.position
-  `).all(projectId) as UntrackedAssistantMessage[];
+  `).all(projectId) as Array<Omit<UntrackedAssistantMessage, 'inherited'> & { inherited: number }>;
+  return rows.map((row) => ({ ...row, inherited: row.inherited === 1 }));
 }
 
 /**

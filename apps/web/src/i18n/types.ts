@@ -5737,4 +5737,6 @@ export interface Dict {
   'settings.modelPricesSaveFailed': string;
   'settings.modelPricesInvalid': string;
   'settings.modelPricesEmpty': string;
+  'settings.modelPricesLoadFailed': string;
+  'settings.modelPricesRetry': string;
 }

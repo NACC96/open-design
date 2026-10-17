@@ -5460,4 +5460,6 @@ export const en: Dict = {
   "settings.modelPricesSaveFailed": "Couldn't save prices",
   "settings.modelPricesInvalid": "Each row needs a model ID and non-negative input and output prices.",
   "settings.modelPricesEmpty": "No custom prices. Standard API prices are used.",
+  "settings.modelPricesLoadFailed": "Couldn't load your saved prices.",
+  "settings.modelPricesRetry": "Retry",
 };

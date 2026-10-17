@@ -5445,4 +5445,6 @@ export const ar: Dict = {
   "settings.modelPricesSaveFailed": "تعذّر حفظ الأسعار",
   "settings.modelPricesInvalid": "يحتاج كل صف إلى معرّف نموذج وأسعار إدخال وإخراج غير سالبة.",
   "settings.modelPricesEmpty": "لا توجد أسعار مخصّصة. تُستخدم أسعار API القياسية.",
+  "settings.modelPricesLoadFailed": "تعذّر تحميل أسعارك المحفوظة.",
+  "settings.modelPricesRetry": "إعادة المحاولة",
 };

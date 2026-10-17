@@ -74,4 +74,24 @@ describe('ModelPriceOverridesSection', () => {
       modelPriceOverrides: { 'my-llama': { input: 0.5, output: 1.5 } },
     });
   });
+
+  it('keeps the form locked when the saved prices fail to load, so a save cannot erase them', async () => {
+    let configReads = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      configReads += 1;
+      if (configReads === 1) return new Response('unavailable', { status: 503 });
+      return json({ config: { modelPriceOverrides: { 'gpt-5.4': { input: 1, output: 2 } } } });
+    });
+    renderSection();
+    fireEvent.click(screen.getByTestId('settings-model-prices-toggle'));
+
+    await screen.findByText("Couldn't load your saved prices.");
+    expect(screen.queryByText('No custom prices. Standard API prices are used.')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Add model' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('settings-model-prices-save') as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByDisplayValue('gpt-5.4')).toBeTruthy());
+    expect(screen.queryByText("Couldn't load your saved prices.")).toBeNull();
+  });
 });

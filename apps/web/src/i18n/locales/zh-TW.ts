@@ -5897,4 +5897,6 @@ export const zhTW: Dict = {
   "settings.modelPricesSaveFailed": "無法儲存價格",
   "settings.modelPricesInvalid": "每一列都需要模型 ID，以及不小於 0 的輸入和輸出價格。",
   "settings.modelPricesEmpty": "沒有自訂價格，使用標準 API 價格。",
+  "settings.modelPricesLoadFailed": "無法載入已儲存的價格。",
+  "settings.modelPricesRetry": "重試",
 };

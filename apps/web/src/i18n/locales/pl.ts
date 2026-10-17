@@ -5445,4 +5445,6 @@ export const pl: Dict = {
   "settings.modelPricesSaveFailed": "Nie udało się zapisać cen",
   "settings.modelPricesInvalid": "Każdy wiersz wymaga ID modelu oraz nieujemnych cen wejścia i wyjścia.",
   "settings.modelPricesEmpty": "Brak własnych cen. Używane są standardowe ceny API.",
+  "settings.modelPricesLoadFailed": "Nie udało się wczytać zapisanych cen.",
+  "settings.modelPricesRetry": "Spróbuj ponownie",
 };

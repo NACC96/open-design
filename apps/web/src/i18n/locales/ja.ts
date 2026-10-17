@@ -5445,4 +5445,6 @@ export const ja: Dict = {
   "settings.modelPricesSaveFailed": "価格を保存できませんでした",
   "settings.modelPricesInvalid": "各行にモデル ID と、0 以上の入力・出力価格が必要です。",
   "settings.modelPricesEmpty": "カスタム価格はありません。標準 API 価格を使用します。",
+  "settings.modelPricesLoadFailed": "保存した価格を読み込めませんでした。",
+  "settings.modelPricesRetry": "再試行",
 };

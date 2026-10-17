@@ -5445,4 +5445,6 @@ export const ko: Dict = {
   "settings.modelPricesSaveFailed": "가격을 저장하지 못했습니다",
   "settings.modelPricesInvalid": "각 행에는 모델 ID와 0 이상의 입력·출력 가격이 필요합니다.",
   "settings.modelPricesEmpty": "사용자 지정 가격이 없습니다. 표준 API 가격을 사용합니다.",
+  "settings.modelPricesLoadFailed": "저장된 가격을 불러오지 못했습니다.",
+  "settings.modelPricesRetry": "다시 시도",
 };

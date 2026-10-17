@@ -5890,4 +5890,6 @@ export const zhCN: Dict = {
   "settings.modelPricesSaveFailed": "无法保存价格",
   "settings.modelPricesInvalid": "每一行都需要模型 ID，以及不小于 0 的输入和输出价格。",
   "settings.modelPricesEmpty": "没有自定义价格，使用标准 API 价格。",
+  "settings.modelPricesLoadFailed": "无法加载已保存的价格。",
+  "settings.modelPricesRetry": "重试",
 };

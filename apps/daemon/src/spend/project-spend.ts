@@ -27,6 +27,7 @@ import {
 } from '@open-design/contracts';
 import { createRunUsageAccumulator, type RunUsageSnapshot } from './run-usage.js';
 import {
+  inheritedRunUsageRecord,
   insertBackfilledRunUsage,
   listPersistedUsageEvents,
   listProjectRunUsage,
@@ -206,6 +207,10 @@ export async function backfillProjectRunUsage(
   const records: RunUsageRecord[] = [];
   const withoutLog: UntrackedAssistantMessage[] = [];
   for (const message of untracked) {
+    if (message.inherited) {
+      records.push(inheritedRunUsageRecord(message.messageId, message.agentId));
+      continue;
+    }
     const replayed = runsLogDir ? await replayRunLog(runsLogDir, message) : null;
     if (replayed) records.push(replayed);
     else withoutLog.push(message);

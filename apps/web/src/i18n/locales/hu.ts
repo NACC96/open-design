@@ -5445,4 +5445,6 @@ export const hu: Dict = {
   "settings.modelPricesSaveFailed": "Az árak mentése nem sikerült",
   "settings.modelPricesInvalid": "Minden sorhoz kell modellazonosító, valamint nem negatív bemeneti és kimeneti ár.",
   "settings.modelPricesEmpty": "Nincsenek saját árak. A standard API-árak vannak használatban.",
+  "settings.modelPricesLoadFailed": "Nem sikerült betölteni a mentett árakat.",
+  "settings.modelPricesRetry": "Újra",
 };

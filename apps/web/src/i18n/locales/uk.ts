@@ -5445,4 +5445,6 @@ export const uk: Dict = {
   "settings.modelPricesSaveFailed": "Не вдалося зберегти ціни",
   "settings.modelPricesInvalid": "У кожному рядку потрібні ID моделі та невід’ємні ціни введення й виведення.",
   "settings.modelPricesEmpty": "Власних цін немає. Використовуються стандартні ціни API.",
+  "settings.modelPricesLoadFailed": "Не вдалося завантажити збережені ціни.",
+  "settings.modelPricesRetry": "Повторити",
 };

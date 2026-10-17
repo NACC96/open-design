@@ -82,6 +82,24 @@ describe('createRunUsageAccumulator', () => {
     expect(snapshot.reportedCostComplete).toBe(true);
   });
 
+  it('reads generic cache counts as additive when the total adds them on top of input (pi turn_end)', () => {
+    // pi's own fixture: input 100 + output 50 + cache read 20 + cache write 5 = total 175.
+    const snapshot = fold([
+      ['agent', {
+        type: 'usage',
+        usage: { input_tokens: 100, output_tokens: 50, cached_read_tokens: 20, cached_write_tokens: 5, total_tokens: 175 },
+      }],
+    ]);
+    expect(snapshot.tokens).toEqual({ input: 100, output: 50, cacheRead: 20, cacheWrite: 5, cacheWrite1h: 0 });
+  });
+
+  it('reads generic cache counts as inclusive when the total is input plus output', () => {
+    const snapshot = fold([
+      ['agent', { type: 'usage', usage: { input_tokens: 100, output_tokens: 50, cached_read_tokens: 20, total_tokens: 150 } }],
+    ]);
+    expect(snapshot.tokens).toEqual({ input: 80, output: 50, cacheRead: 20, cacheWrite: 0, cacheWrite1h: 0 });
+  });
+
   it('treats a cache read larger than input as additive (AMR/pi Responses-style usage)', () => {
     const snapshot = fold([
       ['agent', { type: 'usage', usage: { input_tokens: 40, output_tokens: 5, cached_read_tokens: 9000 } }],
@@ -124,7 +142,41 @@ describe('createRunUsageAccumulator', () => {
     expect(snapshot.tokens.output).toBe(45);
   });
 
-  it('falls back to thread-total growth, flagged approximate, without a per-turn reading', () => {
+  it('prices an older Codex log from evaluationTurnUsage, splitting cache like the thread', () => {
+    // Logged before `turnTokenUsage` existed. One model call: the thread total
+    // never grows within the run, so its growth alone would price it at zero.
+    const snapshot = fold([
+      ['agent', {
+        type: 'usage',
+        usageScope: 'sessionCumulative',
+        usage: { input_tokens: 1_000_000, cached_read_tokens: 800_000, output_tokens: 100_000, thought_tokens: 40_000, total_tokens: 1_100_000 },
+        evaluationTurnUsage: { input: 1_000_000, output: 100_000, total: 1_100_000, modelCalls: 1 },
+      }],
+    ]);
+    expect(snapshot.tokens).toEqual({ input: 200_000, output: 100_000, cacheRead: 800_000, cacheWrite: 0, cacheWrite1h: 0 });
+    expect(snapshot.reasoningTokens).toBe(40_000);
+    expect(snapshot.approximate).toBe(true);
+  });
+
+  it('adds each turn of an older Codex log once, across repeats and a steered turn', () => {
+    const reading = (input: number, output: number, modelCalls: number) => ({
+      type: 'usage',
+      usageScope: 'sessionCumulative',
+      usage: { input_tokens: 1000, cached_read_tokens: 500, output_tokens: 100, total_tokens: 1100 },
+      evaluationTurnUsage: { input, output, total: input + output, modelCalls },
+    });
+    const snapshot = fold([
+      ['agent', reading(100, 10, 1)],
+      ['agent', reading(100, 10, 1)],
+      ['agent', reading(300, 30, 2)],
+      // A steered follow-up: calls restart from one.
+      ['agent', reading(50, 5, 1)],
+    ]);
+    // 350 cache-inclusive input, half of it cached as in the thread total.
+    expect(snapshot.tokens).toEqual({ input: 175, output: 35, cacheRead: 175, cacheWrite: 0, cacheWrite1h: 0 });
+  });
+
+  it('falls back to thread-total growth, flagged approximate, with no per-turn reading at all', () => {
     const cumulative = (input: number, output: number) => ({
       type: 'usage',
       usageScope: 'sessionCumulative',

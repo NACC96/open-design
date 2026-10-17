@@ -45,6 +45,8 @@ export function ModelPriceOverridesSection() {
   const [expanded, setExpanded] = useState(() => focusRequested);
   const [rows, setRows] = useState<PriceOverrideRow[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [invalidRowIds, setInvalidRowIds] = useState<string[]>([]);
@@ -56,13 +58,20 @@ export function ModelPriceOverridesSection() {
     let cancelled = false;
     void fetchDaemonConfig().then((config) => {
       if (cancelled) return;
-      setRows(rowsFromOverrides(config?.modelPriceOverrides));
+      // A failed read is not "no overrides": editing from it and saving would
+      // replace the stored map with only the new rows.
+      if (!config) {
+        setLoadFailed(true);
+        return;
+      }
+      setLoadFailed(false);
+      setRows(rowsFromOverrides(config.modelPriceOverrides));
       setLoaded(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [expanded, loaded]);
+  }, [expanded, loaded, loadAttempt]);
 
   useEffect(() => {
     // The collapsed body stays mounted for its exit transition; keep it out
@@ -146,6 +155,14 @@ export function ModelPriceOverridesSection() {
                 <option key={id} value={id} />
               ))}
             </datalist>
+            {loadFailed ? (
+              <p className={styles.empty} role="alert">
+                {t('settings.modelPricesLoadFailed')}{' '}
+                <Button variant="ghost" size="sm" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+                  {t('settings.modelPricesRetry')}
+                </Button>
+              </p>
+            ) : null}
             {loaded && rows.length === 0 ? (
               <p className={styles.empty}>{t('settings.modelPricesEmpty')}</p>
             ) : null}

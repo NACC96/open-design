@@ -5445,4 +5445,6 @@ export const ptBR: Dict = {
   "settings.modelPricesSaveFailed": "Não foi possível salvar os preços",
   "settings.modelPricesInvalid": "Cada linha precisa de um ID de modelo e preços de entrada e saída não negativos.",
   "settings.modelPricesEmpty": "Nenhum preço personalizado. Os preços padrão da API são usados.",
+  "settings.modelPricesLoadFailed": "Não foi possível carregar seus preços salvos.",
+  "settings.modelPricesRetry": "Tentar novamente",
 };

@@ -5445,4 +5445,6 @@ export const de: Dict = {
   "settings.modelPricesSaveFailed": "Preise konnten nicht gespeichert werden",
   "settings.modelPricesInvalid": "Jede Zeile braucht eine Modell-ID sowie nicht negative Eingabe- und Ausgabepreise.",
   "settings.modelPricesEmpty": "Keine eigenen Preise. Es werden Standard-API-Preise verwendet.",
+  "settings.modelPricesLoadFailed": "Ihre gespeicherten Preise konnten nicht geladen werden.",
+  "settings.modelPricesRetry": "Erneut versuchen",
 };
