@@ -166,6 +166,8 @@ import {
   syncMediaProvidersToDaemon,
 } from './state/config';
 import { enforceLocalAiOnlyConfig, isRetiredAgentId, pickDefaultLocalAgent } from './state/local-ai-only';
+import { mergeAgentModelChoice } from './components/agentModelSelection';
+import { projectExecutionFromConfig } from './state/project-execution';
 import { createSilentUpdatePreferenceWriter } from './state/silent-update-preference';
 import { applyAppearanceToDocument } from './state/appearance';
 import { isMacPlatform } from './utils/platform';
@@ -245,6 +247,7 @@ import type {
   DesignSystemGenerationJob,
   DesignSystemSummary,
   Project,
+  ProjectExecutionChoice,
   ProjectMetadata,
   ProjectTemplate,
   ProviderModelOption,
@@ -382,19 +385,15 @@ function sameAgentModelChoice(
     && (left?.serviceTier ?? null) === (right?.serviceTier ?? null);
 }
 
-export function mergeAgentModelChoice(
-  previous: AgentModelChoice | undefined,
-  next: { model?: string; reasoning?: string; serviceTier?: string },
-): AgentModelChoice {
-  const merged = { ...(previous ?? {}), ...next };
-  // An own `undefined` is an explicit clear (a model change dropping a tier or
-  // effort the next model does not offer); an absent key keeps the old value.
-  for (const key of ['reasoning', 'serviceTier'] as const) {
-    if (Object.prototype.hasOwnProperty.call(next, key) && next[key] === undefined) {
-      delete merged[key];
-    }
-  }
-  return merged;
+// Lives with the other agent-model helpers so the per-project picker merges
+// exactly like the global one; re-exported here for existing importers.
+export { mergeAgentModelChoice };
+
+function executionStampForNewProject(
+  config: AppConfig,
+): { execution: ProjectExecutionChoice } | Record<string, never> {
+  const execution = projectExecutionFromConfig(config);
+  return execution ? { execution } : {};
 }
 
 function clearStaleAmrModelChoiceOnProfileChange(
@@ -3011,6 +3010,11 @@ function AppInner() {
           ...(input.exampleReference
             ? { exampleReference: input.exampleReference }
             : {}),
+          // Stamp the new project with the Home picker's live choice. Read
+          // from the ref, not the daemon: the pick's app-config sync is
+          // fire-and-forget and may still be in flight. Omitted when no agent
+          // is selected, which leaves the project following the default.
+          ...executionStampForNewProject(latestPersistedConfigRef.current),
           workspaceContext: createWorkspaceContext,
         });
       } catch (err) {

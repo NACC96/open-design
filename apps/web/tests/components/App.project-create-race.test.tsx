@@ -138,11 +138,18 @@ vi.mock('../../src/components/EntryView', () => ({
     onRenameProject,
     onOpenSettings,
     onRefreshAgents,
+    onAgentChange,
+    onAgentModelChange,
     agents,
     amrLoggedIn,
     projects,
     projectsLoading,
   }: {
+    onAgentChange?: (agentId: string) => void;
+    onAgentModelChange?: (
+      agentId: string,
+      choice: { model?: string; reasoning?: string },
+    ) => void;
     onCreateProject: (input: unknown) => boolean | Promise<boolean>;
     onCreatePluginShareProject: (
       pluginId: string,
@@ -177,6 +184,17 @@ vi.mock('../../src/components/EntryView', () => ({
       <div data-testid="entry-home-surface" />
       <div data-testid="amr-login-status">{String(amrLoggedIn)}</div>
       <div data-testid="entry-projects-loading">{String(Boolean(projectsLoading))}</div>
+      <button
+        type="button"
+        onClick={() => {
+          // The Home picker's two writes, back to back, with no await: the
+          // create below must not depend on the app-config sync landing.
+          onAgentChange?.('claude');
+          onAgentModelChange?.('claude', { model: 'claude-opus-5-5', reasoning: 'high' });
+        }}
+      >
+        Pick Claude on Home
+      </button>
       <button
         type="button"
         onClick={() => {
@@ -1280,6 +1298,23 @@ describe('App project creation routing', () => {
 
     expect(screen.getByTestId('project-title').textContent).toBe('Fresh project');
     expect(window.location.pathname).toBe('/projects/project-new');
+  });
+
+  it('stamps a new project with the Home picker choice made just before create', async () => {
+    mockedListProjects.mockResolvedValue([]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick Claude on Home' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+
+    await waitFor(() =>
+      expect(mockedCreateProject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Fresh project',
+          execution: { agentId: 'claude', model: 'claude-opus-5-5', reasoning: 'high' },
+        }),
+      ),
+    );
   });
 
   it('stores the Home auto-send prompt outside the project projection before a refresh can drop it', async () => {

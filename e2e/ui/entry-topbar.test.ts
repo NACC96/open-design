@@ -136,10 +136,20 @@ test('[P1] home execution pill reflects the selected Local CLI agent and opens t
 
   const popover = page.getByTestId('inline-model-switcher-popover');
   await expect(popover).toBeVisible();
-  // The composer's switcher is the compact variant: it drops the Local CLI /
-  // BYOK segmented control and the full agent list, opening straight on the
-  // CURRENT agent's models plus an entry into the execution settings where a
-  // different agent is chosen.
+  // The composer's switcher is the compact variant: no Local CLI / BYOK
+  // segmented control and no full agent cards — a row of installed-CLI tabs
+  // (the selected one checked), the CURRENT agent's models, and an entry into
+  // the execution settings.
+  const agentTabs = popover.getByTestId('inline-model-switcher-agent-tab');
+  await expect(agentTabs).toBeVisible();
+  await expect(agentTabs.getByTestId('inline-model-switcher-agent-tab-codex')).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  await expect(agentTabs.getByTestId('inline-model-switcher-agent-tab-mock')).toHaveAttribute(
+    'aria-checked',
+    'false',
+  );
   await expect(popover.getByTestId('inline-model-switcher-compact-model-default')).toBeVisible();
   await expect(popover.getByTestId('inline-model-switcher-mode-daemon')).toHaveCount(0);
   await expect(popover.getByTestId('inline-model-switcher-agent-codex')).toHaveCount(0);

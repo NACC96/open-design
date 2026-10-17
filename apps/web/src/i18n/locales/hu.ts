@@ -2061,6 +2061,7 @@ export const hu: Dict = {
   'avatar.amrConsoleMeta': 'Egyenleg és feltöltés',
   'avatar.settings': 'Beállítások',
   'avatar.backToProjects': 'Vissza a projektekhez',
+  'avatar.executionSaveFailed': 'Nem sikerült menteni a projekthez választott ügynököt.',
   'avatar.metaActive': 'aktív',
   'avatar.metaOffline': 'offline',
   'avatar.metaSelected': 'kiválasztva',

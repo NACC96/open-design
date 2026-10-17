@@ -11,6 +11,7 @@ import {
   type AppliedPluginSnapshot,
   type ArtifactManifest,
   type ByokChatProviderConfig,
+  type ChatRunAgentResolution,
   type ChatRunReasoningResolution,
   type ChatRunStatus,
   type ChatRunStatusResponse,
@@ -37,6 +38,11 @@ import { newInsertId, readAnalyticsContext } from '../analytics.js';
 import type { AnalyticsContext } from '../analytics.js';
 import { spawnEnvForAgent } from '../agents.js';
 import { agentCliEnvForAgent, readAppConfig } from '../app-config.js';
+import {
+  inheritedRunPrefsFromProjectExecution,
+  pickRunAgentId,
+  resolveRunExecutionDefaults,
+} from '../projects/execution.js';
 import type { AuthorizeProjectRequest } from '../collab/project-request-authority.js';
 import {
   workspaceResourceContextFromRequest,
@@ -811,16 +817,18 @@ function routeParamId(req: ApiRequest): string | null {
 
 /**
  * Resolve a requested reasoning effort exactly as the run starter will — same
- * model fallback, same per-model option lists — so the create response can tell
- * the caller (notably `od run start --reasoning`) whether the level is applied
- * instead of dropping it silently. This is validation only: the spawn-time
- * capability gate reports a later omission as a `reasoning_effort_omitted` run
- * diagnostic.
+ * model fallback (the project's stamped model when the stamp governs this
+ * agent, else the saved app-config model), same per-model option lists — so
+ * the create response can tell the caller (notably `od run start --reasoning`)
+ * whether the level is applied instead of dropping it silently. This is
+ * validation only: the spawn-time capability gate reports a later omission as
+ * a `reasoning_effort_omitted` run diagnostic.
  */
 async function resolveRequestedRunReasoning(
   meta: RunCreateMeta,
   getAgentDef: (agentId: string) => RuntimeAgentDef | null | undefined,
   runtimeDataDir: string,
+  project: ProjectRecord | null,
 ): Promise<ChatRunReasoningResolution | null> {
   const requested = typeof meta.reasoning === 'string' && meta.reasoning
     ? meta.reasoning
@@ -838,11 +846,10 @@ async function resolveRequestedRunReasoning(
   const scope = def.id === 'amr'
     ? resolveAmrProfile({ ...process.env, ...(def.env || {}), ...configuredAgentEnv })
     : null;
-  const savedModel = appConfig?.agentModels?.[def.id]?.model;
   const model = resolveRequestedRunModel(
     def,
     meta.model,
-    typeof savedModel === 'string' ? savedModel : null,
+    resolveRunExecutionDefaults(def.id, project, appConfig).model,
     process.env,
     scope,
   );
@@ -1729,6 +1736,37 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
     }
   }
 
+  /**
+   * The agent for a run whose request named none: the project's stamped agent
+   * when installed, else the app-config agent, else the first installed one.
+   * `null` when nothing is installed (or detection failed); the run then fails
+   * later with the same "no agent" outcome as before.
+   */
+  const pickFallbackRunAgent = async (
+    project: ProjectRecord | null,
+  ): Promise<ChatRunAgentResolution | null> => {
+    try {
+      const appCfg = await readAppConfig(RUNTIME_DATA_DIR);
+      const agents = await detectAgents(
+        toJsonRecord(appCfg.agentCliEnv),
+      ).catch((): DetectedAgent[] => []);
+      const pick = pickRunAgentId({
+        stampedAgentId: project?.execution?.agentId ?? null,
+        configuredAgentId: typeof appCfg.agentId === 'string' ? appCfg.agentId : null,
+        agents,
+      });
+      if (!pick.agentId) return null;
+      return {
+        agentId: pick.agentId,
+        source: pick.source,
+        ...(pick.projectAgentId ? { projectAgentId: pick.projectAgentId } : {}),
+      };
+    } catch (err) {
+      console.warn('[runs] agent id fallback failed', err);
+      return null;
+    }
+  };
+
   const handleRunCreate = async (req: ApiRequest, res: ApiResponse) => {
     if (ctx.lifecycle.isDaemonShuttingDown()) {
       return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
@@ -1808,6 +1846,15 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       ? clarificationResolution.value
       : null;
     const clarificationTask = clarificationContinuation?.task ?? null;
+    // Read for its execution stamp only. The run's project record is re-read
+    // below, after plugin snapshot resolution has had its chance to write the
+    // row, so prompt/metadata decisions never see a pre-resolution snapshot.
+    const requestProject = typeof requestBody.projectId === 'string' && requestBody.projectId
+      ? toProjectRecord(getProject(db, requestBody.projectId))
+      : null;
+    // Agent order: an OD Next continuation's locked agent, then the request's
+    // agent, then the project's stamp / app-config / first installed agent.
+    let agentResolution: ChatRunAgentResolution | null = null;
     let effectiveAgentId =
       clarificationTask
         ? clarificationTask.selectedAgentId
@@ -1815,23 +1862,8 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
         ? requestBody.agentId
         : null;
     if (!effectiveAgentId) {
-      try {
-        const appCfg = await readAppConfig(RUNTIME_DATA_DIR);
-        const cfgAgent = typeof appCfg.agentId === 'string' && appCfg.agentId
-          ? appCfg.agentId
-          : null;
-        const agents = await detectAgents(
-          toJsonRecord(appCfg.agentCliEnv),
-        ).catch((): DetectedAgent[] => []);
-        const cfgAgentAvailable = cfgAgent
-          ? agents.some((agent) => agent.id === cfgAgent && agent.available)
-          : false;
-        effectiveAgentId = cfgAgent && cfgAgentAvailable
-          ? cfgAgent
-          : agents.find((agent) => agent.available)?.id ?? null;
-      } catch (err) {
-        console.warn('[runs] agent id fallback failed', err);
-      }
+      agentResolution = await pickFallbackRunAgent(requestProject);
+      effectiveAgentId = agentResolution?.agentId ?? null;
     }
     let preparedWorkspaceScope: RunWorkspaceScope | null = null;
     if (typeof requestBody.projectId === 'string' && requestBody.projectId) {
@@ -2348,27 +2380,23 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       }
     }
     if (typeof meta.agentId !== 'string' || !meta.agentId) {
-      try {
-        const appCfg = await readAppConfig(RUNTIME_DATA_DIR);
-        const cfgAgent = typeof appCfg.agentId === 'string' && appCfg.agentId
-          ? appCfg.agentId
-          : null;
-        const agents = await detectAgents(
-          toJsonRecord(appCfg.agentCliEnv),
-        ).catch((): DetectedAgent[] => []);
-        const cfgAgentAvailable = cfgAgent
-          ? agents.some((agent) => agent.id === cfgAgent && agent.available)
-          : false;
-        if (cfgAgent && cfgAgentAvailable) {
-          meta.agentId = cfgAgent;
-        } else {
-          const firstAvailable = agents.find((agent) => agent.available)?.id ?? null;
-          if (firstAvailable) meta.agentId = firstAvailable;
-        }
-      } catch (err) {
-        console.warn('[runs] agent id fallback failed', err);
+      const lateResolution = await pickFallbackRunAgent(runProject);
+      if (lateResolution) {
+        meta.agentId = lateResolution.agentId;
+        agentResolution = lateResolution;
       }
     }
+    // A project stamped for this agent supplies the reasoning level / service
+    // tier the request left out (the model fallback itself lives in the run
+    // starter, so internal callers of it share the same rule).
+    Object.assign(
+      meta,
+      inheritedRunPrefsFromProjectExecution(meta.agentId, runProject, {
+        model: meta.model,
+        reasoning: meta.reasoning,
+        serviceTier: meta.serviceTier,
+      }),
+    );
     if (!hasCompleteByokOpenCodeConfig({
       ...meta,
       ...(requestBody.byokProvider !== undefined
@@ -2397,11 +2425,17 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
     }
     // Resolved before the Run is prepared so no await sits between
     // preparation and the 202 reply.
-    const reasoningResolution = await resolveRequestedRunReasoning(
-      meta,
-      getAgentDef,
-      RUNTIME_DATA_DIR,
-    );
+    // Reported only when the request itself carried a level; a level inherited
+    // from the project stamp is not something the caller asked for.
+    const reasoningResolution =
+      typeof requestBody.reasoning === 'string' && requestBody.reasoning
+        ? await resolveRequestedRunReasoning(
+            meta,
+            getAgentDef,
+            RUNTIME_DATA_DIR,
+            runProject,
+          )
+        : null;
     if (runProject?.metadata) {
       meta.projectMetadata = runProject.metadata;
     }
@@ -3166,6 +3200,7 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
         ...(strategyTask ? { taskExecutionId: strategyTask.taskExecutionId } : {}),
         ...(strategyTask ? { strategyTask } : {}),
         ...(reasoningResolution ? { reasoning: reasoningResolution } : {}),
+        ...(agentResolution ? { agentResolution } : {}),
       });
     }
     if (preparedRun.kind === 'resume_not_allowed') {
@@ -3248,6 +3283,7 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       ...(strategyTask ? { taskExecutionId: strategyTask.taskExecutionId } : {}),
       ...(strategyTask ? { strategyTask } : {}),
       ...(reasoningResolution ? { reasoning: reasoningResolution } : {}),
+      ...(agentResolution ? { agentResolution } : {}),
     };
     res.status(202).json(body);
     if (

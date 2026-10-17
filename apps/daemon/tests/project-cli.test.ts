@@ -182,6 +182,53 @@ async function startProjectStubServer(): Promise<StubServer> {
         }));
         return;
       }
+      // Project execution stamp (`od project create --agent`, `set-agent`,
+      // and the `od run start` fallback warning).
+      if (captured.method === 'POST' && captured.url === '/api/projects') {
+        const body = JSON.parse(captured.body || '{}');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          project: {
+            id: body.id,
+            name: body.name,
+            execution: body.execution ?? undefined,
+          },
+          conversationId: 'conversation-created',
+        }));
+        return;
+      }
+      if (captured.method === 'GET' && captured.url === '/api/projects/stamped-project') {
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          project: { id: 'stamped-project', name: 'Stamped', execution: { agentId: 'codex', model: 'gpt-5-codex' } },
+        }));
+        return;
+      }
+      if (captured.method === 'GET' && captured.url === '/api/projects/unstamped-project') {
+        res.statusCode = 200;
+        res.end(JSON.stringify({ project: { id: 'unstamped-project', name: 'Unstamped' } }));
+        return;
+      }
+      if (
+        captured.method === 'PATCH'
+        && (captured.url === '/api/projects/stamped-project' || captured.url === '/api/projects/unstamped-project')
+      ) {
+        const body = JSON.parse(captured.body || '{}');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          project: { id: captured.url.split('/').pop(), execution: body.execution ?? undefined },
+        }));
+        return;
+      }
+      if (captured.method === 'POST' && captured.url === '/api/runs') {
+        res.statusCode = 202;
+        res.end(JSON.stringify({
+          runId: 'run-1',
+          conversationId: 'conversation-1',
+          agentResolution: { agentId: 'claude', source: 'app-config', projectAgentId: 'codex' },
+        }));
+        return;
+      }
       // An unbound project catalog (no signed-in workspace / non-vela).
       if (captured.method === 'GET' && captured.url === '/api/projects') {
         res.statusCode = 200;
@@ -395,6 +442,137 @@ describe('od project CLI', () => {
       url: '/api/projects/source-project/duplicate',
     });
     expect(JSON.parse(stub.requests[0]!.body)).toEqual({ name: 'Duplicate Copy' });
+  });
+
+  it('creates a project on an explicit agent and model', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'create', '--name', 'Poster',
+      '--agent', 'codex', '--model', 'gpt-5-codex', '--reasoning', 'high', '--service-tier', 'priority',
+      '--json', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(stub.requests).toHaveLength(1);
+    expect(JSON.parse(stub.requests[0]!.body).execution).toEqual({
+      agentId: 'codex', model: 'gpt-5-codex', reasoning: 'high', serviceTier: 'priority',
+    });
+    expect(JSON.parse(result.stdout).project.execution).toEqual({
+      agentId: 'codex', model: 'gpt-5-codex', reasoning: 'high', serviceTier: 'priority',
+    });
+  });
+
+  it('creates an unstamped project when --agent is omitted', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'create', '--name', 'Poster', '--daemon-url', stub.baseUrl]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(stub.requests[0]!.body)).not.toHaveProperty('execution');
+    expect(result.stdout).toContain('runs on the configured agent');
+  });
+
+  it('names the explicit agent in the human create output', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'create', '--name', 'Poster', '--agent', 'codex', '--model', 'gpt-5-codex',
+      '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain('runs on codex (model gpt-5-codex)');
+  });
+
+  it.each([
+    ['--model', 'gpt-5'],
+    ['--reasoning', 'high'],
+    ['--service-tier', 'priority'],
+  ])('refuses %s on create without --agent', async (flag, value) => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'create', '--name', 'Poster', flag, value, '--daemon-url', stub.baseUrl]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('need --agent');
+    expect(stub.requests).toHaveLength(0);
+  });
+
+  it('set-agent with --agent replaces the whole choice in one PATCH', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'set-agent', 'stamped-project', '--agent', 'claude', '--model', 'claude-sonnet-5-5',
+      '--json', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]).toMatchObject({ method: 'PATCH', url: '/api/projects/stamped-project' });
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({
+      execution: { agentId: 'claude', model: 'claude-sonnet-5-5' },
+    });
+    expect(JSON.parse(result.stdout).project.execution).toEqual({ agentId: 'claude', model: 'claude-sonnet-5-5' });
+  });
+
+  it('set-agent without --agent merges the flags into the current choice', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'set-agent', 'stamped-project', '--reasoning', 'high', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(stub.requests.map((r) => `${r.method} ${r.url}`)).toEqual([
+      'GET /api/projects/stamped-project',
+      'PATCH /api/projects/stamped-project',
+    ]);
+    expect(JSON.parse(stub.requests[1]!.body)).toEqual({
+      execution: { agentId: 'codex', model: 'gpt-5-codex', reasoning: 'high' },
+    });
+    expect(result.stdout).toBe(
+      '[project] stamped-project now runs on codex (model gpt-5-codex, reasoning high)\n',
+    );
+  });
+
+  it('set-agent --clear removes the choice', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli(['project', 'set-agent', 'stamped-project', '--clear', '--daemon-url', stub.baseUrl]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(stub.requests).toHaveLength(1);
+    expect(JSON.parse(stub.requests[0]!.body)).toEqual({ execution: null });
+    expect(result.stdout).toBe('[project] stamped-project now follows the configured agent\n');
+  });
+
+  it('set-agent without --agent refuses a project that has no choice yet', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'project', 'set-agent', 'unstamped-project', '--model', 'gpt-5', '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('Pass --agent <id>');
+    expect(stub.requests.map((r) => `${r.method} ${r.url}`)).toEqual(['GET /api/projects/unstamped-project']);
+  });
+
+  it.each([
+    ['no flags', ['project', 'set-agent', 'stamped-project']],
+    ['--clear with --agent', ['project', 'set-agent', 'stamped-project', '--clear', '--agent', 'claude']],
+    ['no project id', ['project', 'set-agent', '--agent', 'claude']],
+  ])('set-agent rejects %s', async (_label, args) => {
+    stub = await startProjectStubServer();
+    const result = await runCli([...args, '--daemon-url', stub.baseUrl]);
+    expect(result.code).toBe(2);
+    expect(stub.requests).toHaveLength(0);
+  });
+
+  it('od run start warns on stderr when the project agent was not available', async () => {
+    stub = await startProjectStubServer();
+    const result = await runCli([
+      'run', 'start', '--project', 'stamped-project', '--message', 'make a poster', '--json',
+      '--daemon-url', stub.baseUrl,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(stub.requests[0]!.body)).not.toHaveProperty('agentId');
+    expect(JSON.parse(result.stdout).agentResolution).toMatchObject({ projectAgentId: 'codex' });
+    expect(result.stderr).toContain('this project runs on codex, which is not available');
+    expect(result.stderr).toContain('the configured agent (claude)');
+  });
+
+  it('documents the project agent commands', async () => {
+    const projectHelp = await runCli(['project', 'help']);
+    const runHelp = await runCli(['run', 'help']);
+    expect(projectHelp.stdout).toContain('od project set-agent <id>');
+    expect(projectHelp.stdout).toContain('--clear');
+    expect(runHelp.stdout).toContain("--agent defaults to the project's agent");
   });
 
   it('od project list without --workspace resolves the signed-in workspace automatically (#6679)', async () => {

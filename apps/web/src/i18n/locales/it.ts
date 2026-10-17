@@ -2061,6 +2061,7 @@ export const it: Dict = {
   'avatar.amrConsoleMeta': 'Saldo e ricarica',
   'avatar.settings': 'Impostazioni',
   'avatar.backToProjects': 'Torna ai progetti',
+  'avatar.executionSaveFailed': 'Impossibile salvare l’agente scelto per questo progetto.',
   'avatar.metaActive': 'attivo',
   'avatar.metaOffline': 'offline',
   'avatar.metaSelected': 'selezionato',

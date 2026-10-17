@@ -788,7 +788,7 @@ export const TOOL_DEFS = [
         agent: {
           type: 'string',
           description:
-            'Internal runtime id returned by list_agents. Optional; defaults to the configured runtime. Never display the id as user-facing mode copy.',
+            "Internal runtime id returned by list_agents. Optional; defaults to the project's own agent, then the configured runtime. Never display the id as user-facing mode copy.",
         },
         model: {
           type: 'string',

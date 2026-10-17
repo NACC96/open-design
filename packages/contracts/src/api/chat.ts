@@ -523,6 +523,23 @@ export interface ChatRunCreateResponse {
   strategyTask?: StrategyTaskProjectionV2;
   /** Present only when the request carried `reasoning`. */
   reasoning?: ChatRunReasoningResolution;
+  /** Present only when the request omitted `agentId` and the daemon chose one. */
+  agentResolution?: ChatRunAgentResolution;
+}
+
+/**
+ * Which agent the daemon picked for a run whose request named none.
+ *
+ * `project` is the project's stamped agent (`Project.execution.agentId`);
+ * `app-config` is the configured default; `first-available` is the first
+ * installed agent. `projectAgentId` is set when the project has a stamp that
+ * could not be used (its CLI is not installed), so a caller can say why the
+ * run fell back.
+ */
+export interface ChatRunAgentResolution {
+  agentId: string;
+  source: 'project' | 'app-config' | 'first-available';
+  projectAgentId?: string;
 }
 
 /**

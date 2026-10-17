@@ -68,6 +68,7 @@ import type { AgentInfo, ApiProtocol, AppConfig, ExecMode } from '../types';
 import { apiProtocolLabel } from '../utils/apiProtocol';
 import { isVisibleLocalCliAgent } from '../utils/visibleAgents';
 import { AgentIcon } from './AgentIcon';
+import { AgentTabs } from './AgentTabs';
 import { Icon } from './Icon';
 import { modelProviderIconSrc } from './modelProviderIcon';
 import { PlanBadge } from './PlanBadge';
@@ -213,7 +214,10 @@ export function InlineModelSwitcher({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const compactModelListRef = useRef<HTMLDivElement | null>(null);
-  const compactSelectionAnchoredRef = useRef(false);
+  // Which agent's list was last anchored on its selected row this open
+  // (`undefined` = not yet). Keyed by agent so switching CLI tabs re-anchors
+  // the new agent's list instead of leaving it on the old scroll offset.
+  const compactSelectionAnchoredRef = useRef<string | null | undefined>(undefined);
   const campaignBenefitTrackedForOpenRef = useRef(false);
   // Viewport clamp for the popover (issue #99): the anchor chip can sit
   // anywhere on screen (home hero mid-page, chat composer at the bottom), so
@@ -817,13 +821,18 @@ export function InlineModelSwitcher({
   // who has started browsing it.
   useLayoutEffect(() => {
     if (!open) {
-      compactSelectionAnchoredRef.current = false;
+      compactSelectionAnchoredRef.current = undefined;
       return;
     }
-    if (compactSelectionAnchoredRef.current || !compactModelListRef.current) return;
-    compactSelectionAnchoredRef.current = true;
+    if (
+      compactSelectionAnchoredRef.current === currentAgentId ||
+      !compactModelListRef.current
+    ) {
+      return;
+    }
+    compactSelectionAnchoredRef.current = currentAgentId;
     anchorSelectionInView(compactModelListRef.current, '[aria-checked="true"]');
-  }, [compactModelRows, open]);
+  }, [compactModelRows, currentAgentId, open]);
 
   useEffect(() => {
     if (!open) {
@@ -1270,14 +1279,33 @@ export function InlineModelSwitcher({
               (BYOK) provider catalogue — the popover always lists the
               current local CLI agent's models. */}
           {compact ? (
-            // Compact home popover: a plain list of the CURRENT agent's model
-            // names (no header, no agent icons) — switching agents lives in
-            // the execution settings entry below.
+            // Compact home popover: a row of installed-CLI tabs, then the
+            // selected agent's model names. A tab click writes the global
+            // default (so the next new project starts from it) and keeps the
+            // popover open so a model can be picked for that agent; the new
+            // project is stamped with whatever is selected when it is created.
+            <>
+            <div className="inline-switcher__row">
+              {installedAgents.length > 0 ? (
+                <AgentTabs
+                  agents={installedAgents}
+                  selectedId={currentAgent?.id ?? null}
+                  onSelect={(agentId) => void handleAgentButtonClick(agentId)}
+                  ariaLabel={t('inlineSwitcher.agentLabel')}
+                  testIdPrefix="inline-model-switcher-agent-tab"
+                />
+              ) : (
+                <span className="inline-switcher__hint">
+                  {t('inlineSwitcher.noAgentsDetected')}
+                </span>
+              )}
+            </div>
             <div className="inline-switcher__row">
               {currentAgent && compactModelRows.length > 0 ? (
                 <div
                   className="inline-switcher__agent-grid"
                   role="radiogroup"
+                  aria-label={t('inlineSwitcher.modelLabel')}
                   ref={compactModelListRef}
                 >
                   {compactModelRows.map(({ model: m, selectable }) => {
@@ -1364,6 +1392,7 @@ export function InlineModelSwitcher({
                 </span>
               )}
             </div>
+            </>
           ) : (
             <>
               <div className="inline-switcher__row">

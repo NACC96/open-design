@@ -286,7 +286,32 @@ vi.mock('../../src/components/AppChromeHeader', () => ({
 }));
 
 vi.mock('../../src/components/AvatarMenu', () => ({
-  AvatarMenu: () => null,
+  // A stub with just the two picks the project-execution specs drive; it
+  // echoes the project-scoped config it was given so a spec can read it.
+  AvatarMenu: ({
+    config: menuConfig,
+    onAgentChange,
+    onAgentModelChange,
+  }: {
+    config: AppConfig;
+    onAgentChange: (id: string) => void;
+    onAgentModelChange: (id: string, choice: { model?: string; reasoning?: string }) => void;
+  }) => (
+    <div data-testid="avatar-menu-stub" data-agent-id={menuConfig.agentId ?? ''}>
+      <button
+        type="button"
+        data-testid="avatar-stub-pick-claude"
+        onClick={() => onAgentChange('claude')}
+      />
+      <button
+        type="button"
+        data-testid="avatar-stub-pick-model"
+        onClick={() =>
+          onAgentModelChange(menuConfig.agentId ?? '', { model: 'claude-sonnet-5-5' })
+        }
+      />
+    </div>
+  ),
 }));
 
 vi.mock('../../src/components/FileWorkspace', () => ({
@@ -416,7 +441,9 @@ vi.mock('../../src/components/ChatPane', () => ({
     onRetry,
     onResendUserMessage,
     onSubmitQuestionForm,
+    composerFooterAccessory,
   }: {
+    composerFooterAccessory?: ReactNode;
     activeConversationId: string | null;
     conversations: Conversation[];
     streaming: boolean;
@@ -468,6 +495,7 @@ vi.mock('../../src/components/ChatPane', () => ({
         <output data-testid="active-conversation">{activeConversationId}</output>
         <output data-testid="streaming-state">{streaming ? 'streaming' : 'idle'}</output>
         <output data-testid="chat-error">{error}</output>
+        {composerFooterAccessory}
         <output data-testid="conversation-latest-runs">
           {conversations
             .map((conversation) => `${conversation.id}:${conversation.latestRun?.status ?? ''}`)
@@ -4027,6 +4055,126 @@ describe('ProjectView conversation run isolation', () => {
     expect(screen.queryByTestId('workspace-authorize')).toBeNull();
     expect(screen.queryByTestId('workspace-launch-terminal')).toBeNull();
   });
+
+  describe('per-project agent + model', () => {
+    const executionAgents: AgentInfo[] = [
+      { id: 'agent-1', name: 'OpenCode', bin: 'opencode', available: true, models: [] },
+      {
+        id: 'codex',
+        name: 'Codex',
+        bin: 'codex',
+        available: true,
+        models: [{ id: 'default', label: 'Default' }, { id: 'gpt-6.1', label: 'gpt-6.1' }],
+      },
+      {
+        id: 'claude',
+        name: 'Claude Code',
+        bin: 'claude',
+        available: true,
+        models: [
+          { id: 'default', label: 'Default' },
+          { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+        ],
+      },
+    ];
+    const globalDefault: AppConfig = {
+      ...config,
+      agentId: 'agent-1',
+      agentModels: {
+        'agent-1': { model: 'global-model', reasoning: 'max' },
+        claude: { model: 'claude-sonnet-5-5' },
+      },
+    };
+
+    async function sendOnce(): Promise<Record<string, unknown>> {
+      await waitFor(() => expect(screen.getByTestId('active-conversation').textContent).toBe('conv-a'));
+      await waitFor(() => expect(screen.getByTestId('send-message')).toHaveProperty('disabled', false));
+      const before = streamViaDaemon.mock.calls.length;
+      fireEvent.click(screen.getByTestId('submit-question-form'));
+      await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(before + 1));
+      return streamViaDaemon.mock.calls[before]![0] as Record<string, unknown>;
+    }
+
+    it('runs a stamped project on its own agent and model, not the global default', async () => {
+      conversationAMessages = [];
+      renderProjectView(
+        globalDefault,
+        { ...project, execution: { agentId: 'codex', model: 'gpt-6.1' } },
+        executionAgents,
+      );
+
+      const request = await sendOnce();
+      expect(request).toEqual(
+        expect.objectContaining({ agentId: 'codex', model: 'gpt-6.1', reasoning: null }),
+      );
+      expect(screen.getByTestId('avatar-menu-stub').dataset.agentId).toBe('codex');
+    });
+
+    it('runs a legacy unstamped project on the global default', async () => {
+      conversationAMessages = [];
+      renderProjectView(globalDefault, project, executionAgents);
+
+      const request = await sendOnce();
+      expect(request).toEqual(
+        expect.objectContaining({ agentId: 'agent-1', model: 'global-model', reasoning: 'max' }),
+      );
+    });
+
+    it('saves an in-project switch to the project only, and the next run uses it', async () => {
+      conversationAMessages = [];
+      patchProject.mockResolvedValue({ ...project });
+      const onAgentChange = vi.fn();
+      const onAgentModelChange = vi.fn();
+      const onProjectChange = vi.fn();
+      renderProjectView(globalDefault, project, executionAgents, {
+        onAgentChange,
+        onAgentModelChange,
+        onProjectChange,
+      });
+      await waitFor(() => expect(screen.getByTestId('avatar-menu-stub')).toBeTruthy());
+
+      fireEvent.click(screen.getByTestId('avatar-stub-pick-claude'));
+
+      // Stamped from the global claude slot, written to THIS project…
+      const stamped = { agentId: 'claude', model: 'claude-sonnet-5-5' };
+      await waitFor(() =>
+        expect(patchProject).toHaveBeenCalledWith(
+          project.id,
+          { execution: stamped },
+          expect.anything(),
+        ),
+      );
+      expect(onProjectChange).toHaveBeenCalledWith(
+        expect.objectContaining({ id: project.id, execution: stamped }),
+      );
+      // …and never to the app-wide default.
+      expect(onAgentChange).not.toHaveBeenCalled();
+      expect(onAgentModelChange).not.toHaveBeenCalled();
+      expect(screen.getByTestId('avatar-menu-stub').dataset.agentId).toBe('claude');
+
+      const request = await sendOnce();
+      expect(request).toEqual(
+        expect.objectContaining({ agentId: 'claude', model: 'claude-sonnet-5-5' }),
+      );
+    });
+
+    it('rolls an in-project switch back when the project write fails', async () => {
+      conversationAMessages = [];
+      patchProject.mockResolvedValue(null);
+      renderProjectView(
+        globalDefault,
+        { ...project, execution: { agentId: 'codex', model: 'gpt-6.1' } },
+        executionAgents,
+      );
+      await waitFor(() => expect(screen.getByTestId('avatar-menu-stub')).toBeTruthy());
+
+      fireEvent.click(screen.getByTestId('avatar-stub-pick-claude'));
+      await waitFor(() => expect(patchProject).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(screen.getByTestId('avatar-menu-stub').dataset.agentId).toBe('codex'),
+      );
+    });
+  });
 });
 
 function renderProjectView(
@@ -4039,6 +4187,8 @@ function renderProjectView(
   handlers: {
     onModeChange?: (mode: 'daemon' | 'api') => void;
     onAgentChange?: (agentId: string) => void;
+    onAgentModelChange?: (agentId: string, choice: unknown) => void;
+    onProjectChange?: (project: Project) => void;
     onOpenSettings?: (section?: SettingsSection) => void;
     onOpenAmrSettings?: () => void;
     onSwitchToCloud?: () => Promise<void>;
@@ -4060,6 +4210,8 @@ function projectViewElement(
   handlers: {
     onModeChange?: (mode: 'daemon' | 'api') => void;
     onAgentChange?: (agentId: string) => void;
+    onAgentModelChange?: (agentId: string, choice: unknown) => void;
+    onProjectChange?: (project: Project) => void;
     onOpenSettings?: (section?: SettingsSection) => void;
     onOpenAmrSettings?: () => void;
     onSwitchToCloud?: () => Promise<void>;
@@ -4080,7 +4232,7 @@ function projectViewElement(
       daemonLive
       onModeChange={handlers.onModeChange ?? (() => {})}
       onAgentChange={handlers.onAgentChange ?? (() => {})}
-      onAgentModelChange={() => {}}
+      onAgentModelChange={handlers.onAgentModelChange ?? (() => {})}
       onRefreshAgents={() => {}}
       onOpenSettings={handlers.onOpenSettings ?? (() => {})}
       onOpenAmrSettings={handlers.onOpenAmrSettings}
@@ -4089,7 +4241,7 @@ function projectViewElement(
       onBack={() => {}}
       onClearPendingPrompt={() => {}}
       onTouchProject={() => {}}
-      onProjectChange={() => {}}
+      onProjectChange={handlers.onProjectChange ?? (() => {})}
       onProjectsRefresh={() => {}}
     />
   );

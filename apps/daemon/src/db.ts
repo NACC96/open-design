@@ -13,6 +13,7 @@ import type {
   CollabCloudComment,
   OdNextDevicePlatformV1,
   ProjectBrowserWorkspaceTab,
+  ProjectExecutionChoice,
   ProjectTabsState,
 } from '@open-design/contracts';
 import {
@@ -415,6 +416,12 @@ function migrate(db: SqliteDb): void {
   }
   if (!cols.some((c: DbRow) => c.name === 'custom_instructions')) {
     db.exec(`ALTER TABLE projects ADD COLUMN custom_instructions TEXT`);
+  }
+  // Per-project agent + model stamp (`Project.execution`). A top-level column,
+  // not metadata: updateProject replaces metadata wholesale, so a stale
+  // whole-metadata patch would otherwise revert an agent switch.
+  if (!cols.some((c: DbRow) => c.name === 'execution_json')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN execution_json TEXT`);
   }
   const workspaceProjectCols = db.prepare(`PRAGMA table_info(workspace_projects)`).all() as DbRow[];
   if (!workspaceProjectCols.some((c: DbRow) => c.name === 'resource_hub_resource_id')) {
@@ -1067,6 +1074,7 @@ const PROJECT_COLS = `id, name, skill_id AS skillId,
   metadata_json AS metadataJson,
   applied_plugin_snapshot_id AS appliedPluginSnapshotId,
   custom_instructions AS customInstructions,
+  execution_json AS executionJson,
   created_at AS createdAt,
   updated_at AS updatedAt`;
 
@@ -1099,6 +1107,7 @@ export function listUnboundProjects(db: SqliteDb) {
               p.metadata_json AS metadataJson,
               p.applied_plugin_snapshot_id AS appliedPluginSnapshotId,
               p.custom_instructions AS customInstructions,
+              p.execution_json AS executionJson,
               p.created_at AS createdAt,
               p.updated_at AS updatedAt
          FROM projects p
@@ -1142,6 +1151,7 @@ export function listWorkspaceProjects(db: SqliteDb, workspaceId: string) {
               p.metadata_json AS metadataJson,
               p.applied_plugin_snapshot_id AS appliedPluginSnapshotId,
               p.custom_instructions AS customInstructions,
+              p.execution_json AS executionJson,
               p.created_at AS createdAt,
               p.updated_at AS updatedAt,
               wp.project_id AS workspaceProjectId,
@@ -2009,8 +2019,8 @@ export function insertProject(db: SqliteDb, p: DbRow) {
   db.prepare(
     `INSERT INTO projects
        (id, name, skill_id, design_system_id, pending_prompt,
-        metadata_json, custom_instructions, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        metadata_json, custom_instructions, execution_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     p.id,
     p.name,
@@ -2019,6 +2029,7 @@ export function insertProject(db: SqliteDb, p: DbRow) {
     p.pendingPrompt ?? null,
     p.metadata ? JSON.stringify(p.metadata) : null,
     p.customInstructions ?? null,
+    stringifyProjectExecution(p.execution),
     p.createdAt,
     p.updatedAt,
   );
@@ -2031,6 +2042,9 @@ export function updateProject(db: SqliteDb, id: string, patch: DbRow) {
   const merged = {
     ...existing,
     ...patch,
+    // Omitted (or explicitly undefined) keeps the stamp; only `null` clears it.
+    // A metadata-only or rename patch must never drop the project's agent.
+    execution: patch.execution === undefined ? existing.execution : patch.execution,
     updatedAt: nextUpdatedAt(patch.updatedAt, existing.updatedAt),
   };
   db.prepare(
@@ -2041,6 +2055,7 @@ export function updateProject(db: SqliteDb, id: string, patch: DbRow) {
             pending_prompt = ?,
             metadata_json = ?,
             custom_instructions = ?,
+            execution_json = ?,
             updated_at = ?
       WHERE id = ?`,
   ).run(
@@ -2050,6 +2065,7 @@ export function updateProject(db: SqliteDb, id: string, patch: DbRow) {
     merged.pendingPrompt ?? null,
     merged.metadata ? JSON.stringify(merged.metadata) : null,
     merged.customInstructions ?? null,
+    stringifyProjectExecution(merged.execution),
     merged.updatedAt,
     id,
   );
@@ -2078,9 +2094,45 @@ function normalizeProject(row: DbRow) {
     metadata,
     appliedPluginSnapshotId: row.appliedPluginSnapshotId ?? undefined,
     customInstructions: row.customInstructions ?? undefined,
+    execution: parseProjectExecutionJson(row.executionJson),
     createdAt: Number(row.createdAt),
     updatedAt: Number(row.updatedAt),
   };
+}
+
+const PROJECT_EXECUTION_PREF_KEYS = ['model', 'reasoning', 'serviceTier'] as const;
+
+/**
+ * Read a stored `projects.execution_json`. Unparseable JSON or a value that is
+ * not `{ agentId: string, model?/reasoning?/serviceTier?: string }` reads as
+ * unstamped rather than failing the project read; the write path
+ * (`parseProjectExecutionChoice`) is where values are validated.
+ */
+export function parseProjectExecutionJson(raw: unknown): ProjectExecutionChoice | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.agentId !== 'string' || record.agentId.length === 0) return undefined;
+  const execution: ProjectExecutionChoice = { agentId: record.agentId };
+  for (const key of PROJECT_EXECUTION_PREF_KEYS) {
+    const value = record[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'string' || value.length === 0) return undefined;
+    execution[key] = value;
+  }
+  return execution;
+}
+
+function stringifyProjectExecution(execution: unknown): string | null {
+  if (!execution || typeof execution !== 'object') return null;
+  const parsed = parseProjectExecutionJson(JSON.stringify(execution));
+  return parsed ? JSON.stringify(parsed) : null;
 }
 
 function normalizeProjectRunStatus(status: unknown) {

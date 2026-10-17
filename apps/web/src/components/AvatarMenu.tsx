@@ -7,6 +7,8 @@ import { amrHandoffDeviceId, attributedAmrUrl, recordAmrEntry } from '../analyti
 import { useAnalytics } from '../analytics/provider';
 import { useT } from '../i18n';
 import { AgentIcon } from './AgentIcon';
+import { AgentTabs } from './AgentTabs';
+import { orderAgentsWithOpenDesignFirst } from './agentOrdering';
 import { modelProviderIconSrc } from './modelProviderIcon';
 import { RemixIcon } from './RemixIcon';
 import {
@@ -89,11 +91,16 @@ interface Props {
 }
 
 /**
- * Compact runtime control. Click opens a dropdown with the OpenDesign account
- * and the model picker for the active agent. Execution wiring that is not a
- * per-message choice (execution mode, which CLI agent, PATH rescan, BYOK
- * provider setup) lives in Settings → Execution; this popover keeps the
- * active agent's model and reasoning choices close to the composer.
+ * Compact runtime control. Click opens a dropdown with the installed-CLI tabs
+ * and the model / reasoning picker for the active agent. Inside a project the
+ * host wires `onAgentChange` / `onAgentModelChange` to that project's own
+ * execution stamp, so a pick here never moves the app-wide default. Wiring
+ * that is not a per-project choice (PATH rescan, CLI env, provider setup)
+ * lives in Settings → Execution.
+ *
+ * Switching CLI mid-conversation starts the new CLI fresh: it sees the project
+ * files but only the chat turns since another agent last answered
+ * (`scopeHistoryToAgent` in `providers/daemon.ts`).
  */
 export function AvatarMenu({
   config: savedConfig,
@@ -207,7 +214,8 @@ export function AvatarMenu({
       const composer = triggerRef.current?.closest('.composer-shell')?.getBoundingClientRect();
       const minLeft = Math.max(margin, composer?.left ?? margin);
       const maxRight = Math.min(window.innerWidth - margin, composer?.right ?? window.innerWidth - margin);
-      const width = Math.min(208, Math.max(0, maxRight - minLeft));
+      // 260 fits two installed-CLI tabs per row above the model list.
+      const width = Math.min(260, Math.max(0, maxRight - minLeft));
       const left = Math.min(
         Math.max(composer ? rect.right - width : rect.left, minLeft),
         maxRight - width,
@@ -265,6 +273,10 @@ export function AvatarMenu({
   const currentAgent = useMemo(
     () => agents.find((a) => a.id === config.agentId) ?? null,
     [agents, config.agentId],
+  );
+  const installedAgents = useMemo(
+    () => orderAgentsWithOpenDesignFirst(agents.filter((a) => a.available)),
+    [agents],
   );
   const currentAgentModelOptions = useMemo(() => {
     const models = currentAgent?.models ?? [];
@@ -595,6 +607,20 @@ export function AvatarMenu({
         >
           {config.mode === 'daemon' ? (
             <>
+              {/* Above the model list and outside its `hasSelectableModels`
+                  gate: a project pinned to a CLI that is no longer installed
+                  still needs a way onto one that is. */}
+              {installedAgents.length > 0 ? (
+                <div className="avatar-model-section">
+                  <AgentTabs
+                    agents={installedAgents}
+                    selectedId={currentAgent?.id ?? config.agentId ?? null}
+                    onSelect={onAgentChange}
+                    ariaLabel={t('inlineSwitcher.agentLabel')}
+                    testIdPrefix="avatar-agent-tab"
+                  />
+                </div>
+              ) : null}
               {hasSelectableModels && currentAgent ? (
                 <div className="avatar-model-section">
                   {currentAgent.models && currentAgent.models.length > 0 ? (
@@ -870,12 +896,10 @@ export function AvatarMenu({
             ) : null
           ) : null}
 
-          {/* The one link out to 设置 → 执行. #5517's popover has no such entry,
-              but #5517 also never moved CLI switching out of this popover — we
-              did (2026-07-21), so without this the place that switching moved TO
-              is unreachable from here. Pinned to the bottom of the scroll port
-              like the home switcher's, so a long model list cannot scroll it
-              away. */}
+          {/* The one link out to 设置 → 执行, for the setup that is not a
+              per-project pick (CLI env, PATH rescan). Pinned to the bottom of
+              the scroll port like the home switcher's, so a long model list
+              cannot scroll it away. */}
           <button
             type="button"
             className="avatar-item avatar-item--pinned"

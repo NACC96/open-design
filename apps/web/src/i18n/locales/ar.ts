@@ -2061,6 +2061,7 @@ export const ar: Dict = {
   'avatar.amrConsoleMeta': 'الرصيد وإعادة الشحن',
   'avatar.settings': 'الإعدادات',
   'avatar.backToProjects': 'العودة للمشاريع',
+  'avatar.executionSaveFailed': 'تعذّر حفظ اختيار الوكيل لهذا المشروع.',
   'avatar.metaActive': 'نشط',
   'avatar.metaOffline': 'غير متصل',
   'avatar.metaSelected': 'محدد',

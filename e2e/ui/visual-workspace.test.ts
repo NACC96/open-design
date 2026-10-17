@@ -200,7 +200,9 @@ test('[P2] captures the topbar local CLI model list surface', async ({ page }) =
   // Settings → Execution — and is captured in this same lane by
   // visual-settings.test.ts's "settings local CLI model dropdown" case, so the
   // capture kept here is the list a real multi-model catalog renders.
-  const modelList = popover.getByRole('radiogroup');
+  // The installed-CLI tabs above it are a radiogroup too; pick the model list
+  // by its name.
+  const modelList = popover.getByRole('radiogroup', { name: 'Model', exact: true });
   await expect(modelList).toBeVisible();
   await expect(popover.getByTestId('inline-model-switcher-compact-model-sonnet-alias')).toBeVisible();
   await expect(popover.getByTestId('inline-model-switcher-agent-model')).toHaveCount(0);

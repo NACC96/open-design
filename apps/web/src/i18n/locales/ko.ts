@@ -2061,6 +2061,7 @@ export const ko: Dict = {
   'avatar.amrConsoleMeta': '잔액 및 충전',
   'avatar.settings': '설정',
   'avatar.backToProjects': '프로젝트 목록으로 돌아가기',
+  'avatar.executionSaveFailed': '이 프로젝트의 에이전트 선택을 저장하지 못했습니다.',
   'avatar.metaActive': '활성',
   'avatar.metaOffline': '오프라인',
   'avatar.metaSelected': '선택됨',

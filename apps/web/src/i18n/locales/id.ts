@@ -2061,6 +2061,7 @@ export const id: Dict = {
   'avatar.amrConsoleMeta': 'Balance & recharge',
   'avatar.settings': 'Pengaturan',
   'avatar.backToProjects': 'Kembali ke proyek',
+  'avatar.executionSaveFailed': 'Gagal menyimpan pilihan agen untuk proyek ini.',
   'avatar.metaActive': 'aktif',
   'avatar.metaOffline': 'offline',
   'avatar.metaSelected': 'dipilih',

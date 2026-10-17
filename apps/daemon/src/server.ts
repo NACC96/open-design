@@ -1234,6 +1234,7 @@ import {
   renderPluginSharePrompt,
 } from './plugins/share-helpers.js';
 import { sanitizeArchiveFilename } from './projects/archive-filename.js';
+import { resolveRunExecutionDefaults } from './projects/execution.js';
 import {
   isLoopbackHostname,
   isLoopbackPeerAddress,
@@ -11946,10 +11947,15 @@ export async function startServer({
           ...configuredAgentEnv,
         })
       : null;
-    const configuredModel =
-      typeof appConfigForRun?.agentModels?.[def.id]?.model === 'string'
-        ? appConfigForRun.agentModels[def.id].model
-        : null;
+    // A project stamped for this agent owns the fallback: its model, or the
+    // CLI default when the stamp names none — never the global agentModels.
+    // Unstamped projects (and runs sent to a different agent) keep reading the
+    // saved app-config model.
+    const configuredModel = resolveRunExecutionDefaults(
+      def.id,
+      projectRecord,
+      appConfigForRun,
+    ).model;
     let safeModel = resolveRequestedRunModel(
       def,
       requestedRuntimeModel,
